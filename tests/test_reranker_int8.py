@@ -18,8 +18,8 @@ def test_int8_load_used_when_cuda_available(
         captured["model_name"] = model_name
         captured["kwargs"] = kwargs
         return SimpleNamespace(
-            to=lambda device: SimpleNamespace(eval=lambda: None),
             eval=lambda: None,
+            to=lambda device: SimpleNamespace(),
         )
 
     monkeypatch.setattr(
@@ -31,11 +31,14 @@ def test_int8_load_used_when_cuda_available(
         lambda name: SimpleNamespace(),
     )
     LocalBgeReranker("fake/model")
-    assert captured["kwargs"]["quantization_config"].load_in_8bit is True
-    assert captured["kwargs"]["device_map"] == "auto"
     assert "quantization_config" in captured["kwargs"], (
         "must pass quantization_config on CUDA"
     )
+    assert captured["kwargs"]["quantization_config"].load_in_8bit is True
+    assert captured["kwargs"]["quantization_config"].llm_int8_skip_modules == [
+        "classifier"
+    ], "the classifier (scoring head) must stay FP32 or logits collapse to a constant"
+    assert captured["kwargs"]["device_map"] == "auto"
 
 
 def test_fp32_fallback_when_no_cuda(monkeypatch: pytest.MonkeyPatch) -> None:

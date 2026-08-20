@@ -34,7 +34,10 @@ class LocalBgeReranker:
             from transformers import BitsAndBytesConfig
 
             try:
-                quantization_config = BitsAndBytesConfig(load_in_8bit=True)  # type: ignore[no-untyped-call]
+                quantization_config = BitsAndBytesConfig(  # type: ignore[no-untyped-call]
+                    load_in_8bit=True,
+                    llm_int8_skip_modules=["classifier"],
+                )
                 self._model = AutoModelForSequenceClassification.from_pretrained(
                     model_name,
                     quantization_config=quantization_config,
