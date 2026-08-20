@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "CourseMate RAG chatbot: course advisory and knowledge Q&A grounded in study documents."
 requires-python = ">=3.11"
 dependencies = [
+    "accelerate>=0.30",
+    "bitsandbytes>=0.44",
     "faiss-cpu>=1.8",
     "rank-bm25>=0.2.2",
     "openai>=1.0",
