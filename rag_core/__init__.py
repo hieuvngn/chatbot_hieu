@@ -25,13 +25,14 @@ from rag_core.judge import (
     OpenRouterQueryRewriter,
     QueryRewriter,
 )
-from rag_core.models import AnswerResult, Chunk, Session, Source
+from rag_core.models import MAX_TURNS, AnswerResult, Chunk, Session, Source
 from rag_core.reranker import (
     RERANK_INPUT_TOP_K,
     RERANK_KEEP_TOP_K,
     LocalBgeReranker,
     Reranker,
 )
+from rag_core.rewrite import OpenRouterSessionRewriter, SessionRewriter
 
 
 class RagCore:
@@ -51,6 +52,7 @@ class RagCore:
         judge: Judge | None = None,
         rewriter: QueryRewriter | None = None,
         checker: AnswerChecker | None = None,
+        session_rewriter: SessionRewriter | None = None,
     ) -> None:
         self._embedder = embedder
         self._generator = generator
@@ -58,6 +60,7 @@ class RagCore:
         self._judge = judge
         self._rewriter = rewriter
         self._checker = checker
+        self._session_rewriter = session_rewriter
         self._index = index or self._build_index(data_dir, embedder)
 
     @staticmethod
@@ -76,12 +79,19 @@ class RagCore:
         return dedupe_by_source(reranked[:RERANK_KEEP_TOP_K], FINAL_TOP_K)
 
     def answer(self, user_message: str, session: Session) -> AnswerResult:
-        query_vector = np.asarray(self._embedder.embed_query(user_message), dtype=np.float32)
-        retrieved = self._retrieve_sources(user_message, query_vector)
+        query = self._rewrite_for_session(user_message, session)
+        query_vector = np.asarray(self._embedder.embed_query(query), dtype=np.float32)
+        retrieved = self._retrieve_sources(query, query_vector)
 
         if self._judge is not None and self._rewriter is not None:
-            return self._gated_answer(user_message, retrieved, self._judge, self._rewriter)
-        return self._generate_result(user_message, retrieved)
+            return self._gated_answer(query, retrieved, self._judge, self._rewriter)
+        return self._generate_result(query, retrieved)
+
+    def _rewrite_for_session(self, message: str, session: Session) -> str:
+        if self._session_rewriter is None or not session.turns:
+            return message
+        history = session.turns[-MAX_TURNS:]
+        return self._session_rewriter.rewrite(message, history)
 
     def _gated_answer(
         self,
@@ -166,6 +176,11 @@ def build_rag_core(config: Config | None = None) -> RagCore:
         model=config.llm_model,
         base_url=config.base_url,
     )
+    session_rewriter = OpenRouterSessionRewriter(
+        api_key=config.api_key,
+        model=config.llm_model,
+        base_url=config.base_url,
+    )
     return RagCore(
         config.data_dir,
         embedder,
@@ -174,6 +189,7 @@ def build_rag_core(config: Config | None = None) -> RagCore:
         judge=judge,
         rewriter=rewriter,
         checker=checker,
+        session_rewriter=session_rewriter,
     )
 
 
@@ -195,4 +211,6 @@ __all__ = [
     "AnswerChecker",
     "OpenRouterAnswerChecker",
     "CheckVerdict",
+    "SessionRewriter",
+    "OpenRouterSessionRewriter",
 ]

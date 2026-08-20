@@ -9,7 +9,7 @@ from rag_core import RagCore, Session
 from rag_core.answer_check import CheckVerdict, DEFAULT_UNSUPPORTED_FEEDBACK
 from rag_core.index import FINAL_TOP_K, dedupe_by_source
 from rag_core.judge import Judgment, Level
-from rag_core.models import Chunk, Source
+from rag_core.models import Chunk, Source, Turn
 from rag_core.reranker import RERANK_KEEP_TOP_K
 
 SEED = 42
@@ -142,6 +142,18 @@ class FakeChecker:
         return self.verdicts[min(len(self.calls) - 1, len(self.verdicts) - 1)]
 
 
+class FakeSessionRewriter:
+    """Returns a fixed rewrite and records the messages/history it saw."""
+
+    def __init__(self, rewritten: str = "bảng băm cấu trúc dữ liệu") -> None:
+        self.rewritten = rewritten
+        self.calls: list[tuple[str, list[Turn]]] = []
+
+    def rewrite(self, message: str, turns: list[Turn]) -> str:
+        self.calls.append((message, list(turns)))
+        return self.rewritten
+
+
 def _content_tokens(text: str) -> list[str]:
     return [t for t in text.lower().split() if t not in STOPWORDS]
 
@@ -151,7 +163,8 @@ def make_core(tmp_path: Path, embedder: RecordingEmbedder | None = None,
               reranker: FakeReranker | None = None,
               judge: FakeJudge | None = None,
               rewriter: FakeRewriter | None = None,
-              checker: FakeChecker | None = None) -> tuple[RagCore, gd.Dataset]:
+              checker: FakeChecker | None = None,
+              session_rewriter: FakeSessionRewriter | None = None) -> tuple[RagCore, gd.Dataset]:
     ds = gd.generate(seed=SEED)
     gd.write(ds, tmp_path)
     core = RagCore(
@@ -162,6 +175,7 @@ def make_core(tmp_path: Path, embedder: RecordingEmbedder | None = None,
         judge=judge,
         rewriter=rewriter,
         checker=checker,
+        session_rewriter=session_rewriter,
     )
     return core, ds
 
@@ -579,3 +593,99 @@ def test_judge_refusal_never_reaches_answer_check(tmp_path: Path) -> None:
     assert result.refused
     assert checker.calls == [], "the answer check must not run on a judge refusal"
     assert generator.calls == [], "a judge refusal never reaches generation"
+
+
+def history_with_turns() -> Session:
+    s = session()
+    s.turns = [
+        Turn(role="user", text="giải thích bảng băm là gì?"),
+        Turn(role="assistant", text="Bảng băm là một cấu trúc dữ liệu."),
+    ]
+    return s
+
+
+def test_follow_up_rewritten_into_standalone_question_before_retrieval(tmp_path: Path) -> None:
+    rewriter = FakeSessionRewriter(rewritten="bảng băm cấu trúc dữ liệu")
+    generator = FakeGenerator()
+    embedder = RecordingEmbedder()
+    core, _ = make_core(
+        tmp_path, embedder=embedder, generator=generator, session_rewriter=rewriter
+    )
+    history = history_with_turns()
+
+    result = core.answer("còn ví dụ về nó?", history)
+
+    assert rewriter.calls == [("còn ví dụ về nó?", history.turns)]
+    assert embedder.query_calls == 1, "the rewritten query is embedded once, not the raw follow-up"
+    assert len(generator.calls) == 1
+    question, _ = generator.calls[0]
+    assert question == "bảng băm cấu trúc dữ liệu", (
+        "the rewritten query must flow through retrieval into generation"
+    )
+    assert result.answer
+
+
+def test_first_message_passes_through_unchanged_without_rewrite(tmp_path: Path) -> None:
+    rewriter = FakeSessionRewriter()
+    generator = FakeGenerator()
+    embedder = RecordingEmbedder()
+    core, _ = make_core(
+        tmp_path, embedder=embedder, generator=generator, session_rewriter=rewriter
+    )
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert rewriter.calls == [], "the first message has no history to rewrite against"
+    assert embedder.query_calls == 1
+    question, _ = generator.calls[0]
+    assert question == "giải thích bảng băm là gì?"
+    assert result.answer
+
+
+def test_rewritten_query_flows_through_gated_pipeline(tmp_path: Path) -> None:
+    session_rewriter = FakeSessionRewriter(rewritten="bảng băm cấu trúc dữ liệu")
+    judge = FakeJudge(levels=["high"])
+    generator = FakeGenerator()
+    core, _ = make_core(
+        tmp_path,
+        generator=generator,
+        judge=judge,
+        rewriter=FakeRewriter(),
+        session_rewriter=session_rewriter,
+    )
+    history = history_with_turns()
+
+    result = core.answer("cho ví dụ", history)
+
+    assert not result.refused
+    assert judge.calls[0][0] == "bảng băm cấu trúc dữ liệu"
+    assert generator.calls[0][0] == "bảng băm cấu trúc dữ liệu"
+
+
+def test_answer_does_not_mutate_session(tmp_path: Path) -> None:
+    rewriter = FakeSessionRewriter()
+    core, _ = make_core(tmp_path, session_rewriter=rewriter)
+    history = history_with_turns()
+
+    core.answer("còn ví dụ về nó?", history)
+
+    assert [t.text for t in history.turns] == [
+        "giải thích bảng băm là gì?",
+        "Bảng băm là một cấu trúc dữ liệu.",
+    ], "answer() must not append turns; persistence is the caller's job"
+
+
+def test_rewriter_receives_only_last_six_turns(tmp_path: Path) -> None:
+    rewriter = FakeSessionRewriter()
+    generator = FakeGenerator()
+    core, _ = make_core(tmp_path, generator=generator, session_rewriter=rewriter)
+    history = session()
+    for i in range(8):
+        role = "user" if i % 2 == 0 else "assistant"
+        history.turns.append(Turn(role=role, text=f"turn {i}"))
+
+    core.answer("còn ví dụ về nó?", history)
+
+    _, turns = rewriter.calls[0]
+    assert len(turns) == 6, "the rewrite must use only the last 6 turns"
+    assert [t.text for t in turns] == [f"turn {i}" for i in range(2, 8)]

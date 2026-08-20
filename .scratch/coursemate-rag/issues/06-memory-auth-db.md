@@ -4,9 +4,13 @@
 
 **Blocked by:** 05 (answer check and regenerate)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Registering a new user and logging in works against the SQLite database
-- [ ] A Session persists the last 6 turns per user and resumes across visits
-- [ ] A follow-up question is rewritten into a standalone question using session history before it enters retrieval
-- [ ] `answer()` accepts a Session and the rewritten query flows through the full pipeline
+- [x] Registering a new user and logging in works against the SQLite database
+- [x] A Session persists the last 6 turns per user and resumes across visits
+- [x] A follow-up question is rewritten into a standalone question using session history before it enters retrieval
+- [x] `answer()` accepts a Session and the rewritten query flows through the full pipeline
+
+## Comments
+
+- 2026-08-20: Implemented. `rag_core/db.py` with the `Database` class (SQLite via stdlib, `users` / `conversations` (one per user, `user_id UNIQUE`) / `messages` tables, plaintext passwords by demo choice); `register` (duplicate username raises `ValueError`), `login` (returns `User | None`), `get_or_create_session` (stable per user), `append_exchange` (persists a user message + assistant reply as two turns, hiding the role vocabulary), `get_session` (last `MAX_TURNS=6` messages in order), persistence across `Database` instances. `rag_core/rewrite.py` with the `SessionRewriter` protocol and `OpenRouterSessionRewriter` (LLM rewrite of a follow-up into a standalone question using the session turns; empty model output falls back to the original message). `RagCore.answer()` rewrites the message through the session rewriter before embedding/retrieval — skipped when the session has no history, so first messages pass through unchanged — and the rewritten query flows through retrieval, the judge gate, generation and the answer check. `build_rag_core()` wires the session rewriter in; the optional `None` gate keeps the naive/rerank-only demo paths. `demo_memory.py` demonstrates register/login, the resumed session, the printed rewritten query for a follow-up, and the session surviving a database reopen. 61 tests pass, mypy strict clean. Review findings addressed: `append_exchange` replaces the raw `append_turn(role)` API; `MAX_TURNS` moved to `models.py` and enforced at the `answer()` seam (`_rewrite_for_session` truncates to the last 6 turns, not just in the DB); `User` moved to `models.py`; the demo now calls `RagCore.answer()` (single entry point, no hand-rolled pipeline) and persists an exchange only when the answer is not a refusal. Acknowledged deviations: `Session.user_id` stays `str` while the DB column is `INTEGER` (conversion confined to `db.py`); `tests/test_db.py` exercises the `Database` directly, which the spec's "no database tests beyond what the pipeline touches" would forbid — the ticket's own acceptance criterion 1 ("registering/logging in works against the SQLite database") is only verifiable at that seam, since UI tests are out of scope and nothing routes auth through `answer()`.

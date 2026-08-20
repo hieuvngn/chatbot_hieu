@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+MAX_TURNS = 6
+
 
 @dataclass(frozen=True)
 class Source:
@@ -32,6 +34,12 @@ class AnswerResult:
     sources: list[Source]
     refused: bool = False
     rephrase_suggestion: str = ""
+
+
+@dataclass(frozen=True)
+class User:
+    id: int
+    username: str
 
 
 @dataclass

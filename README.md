@@ -124,6 +124,18 @@ uv run python -m demo_answer_check "giải thích bảng băm là gì?"
 
 Prints the top-5 Sources, the draft answer, the verifier's verdict with the named unsupported claims, the regeneration with feedback when the draft fails, and the final decision — a verified answer with citations or a refusal.
 
+## Memory, auth, and database
+
+Per-user persistence and conversational context: a SQLite database (`rag_core/db.py`) with `users`, `conversations` (one per user), and `messages` tables. Register and login by username/password (passwords stored in plaintext by explicit demo choice). Each user has a single Session that persists the last 6 turns across visits. Before retrieval, an LLM pass (`rag_core/rewrite.py`) rewrites a follow-up message into a standalone question using the session history; first messages pass through unchanged. `answer(user_message, session)` consumes the Session and the rewritten query flows through the whole pipeline (retrieval → re-ranking → judge → generation → answer check). `build_rag_core()` wires the session rewriter in automatically.
+
+### Demo script
+
+```sh
+uv run python -m demo_memory "còn ví dụ về nó?"
+```
+
+Registers/logs in a demo user against SQLite, asks a first question (passed through unchanged), then a follow-up whose rewritten query is printed before it enters retrieval, and shows the session history surviving a database reopen.
+
 ## Naive RAG core demo
 
 ```sh
