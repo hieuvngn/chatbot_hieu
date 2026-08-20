@@ -93,7 +93,7 @@ def test_int8_load_used_when_cuda_available(monkeypatch) -> None:
     def fake_from_pretrained(model_name: str, **kwargs) -> SimpleNamespace:
         captured["model_name"] = model_name
         captured["kwargs"] = kwargs
-        return SimpleNamespace(to=lambda device: SimpleNamespace(eval=lambda: None))
+        return SimpleNamespace(eval=lambda: None, to=lambda device: SimpleNamespace())
 
     monkeypatch.setattr(
         "transformers.AutoModelForSequenceClassification.from_pretrained",
@@ -104,11 +104,14 @@ def test_int8_load_used_when_cuda_available(monkeypatch) -> None:
         lambda name: SimpleNamespace(),
     )
     LocalBgeReranker("fake/model")
-    assert captured["kwargs"]["quantization_config"].load_in_8bit is True
-    assert captured["kwargs"]["device_map"] == "auto"
     assert "quantization_config" in captured["kwargs"], (
         "must pass quantization_config on CUDA"
     )
+    assert captured["kwargs"]["quantization_config"].load_in_8bit is True
+    assert captured["kwargs"]["quantization_config"].llm_int8_skip_modules == ["classifier"], (
+        "the classifier (scoring head) must stay FP32 or logits collapse to a constant"
+    )
+    assert captured["kwargs"]["device_map"] == "auto"
 
 
 def test_fp32_fallback_when_no_cuda(monkeypatch) -> None:
@@ -158,7 +161,10 @@ Replace the body of `LocalBgeReranker.__init__` in `rag_core/reranker.py:26-37` 
             from transformers import BitsAndBytesConfig
 
             try:
-                quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+                quantization_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    llm_int8_skip_modules=["classifier"],
+                )
                 self._model = AutoModelForSequenceClassification.from_pretrained(
                     model_name,
                     quantization_config=quantization_config,
@@ -260,33 +266,45 @@ print("top:", ranked[0].source)
 - [ ] **Step 2: Run the smoke script**
 
 Run: `uv run python scripts/smoke_reranker_int8.py`
-Expected: prints `device: cuda`, a GPU allocation number well under 1 GiB (target ~570-800 MiB), and a top-1 chunk about databases. Also run it twice in a row to confirm stability.
+Expected: prints `device: cuda`, a GPU allocation number well under 1 GiB (target ~570-800 MiB), and a top-1 chunk about databases (`doc1`). Also run it twice in a row to confirm stability.
 
-- [ ] **Step 3: Compare with FP32 to confirm the reduction**
+- [ ] **Step 3: Verify the INT8 scores still discriminate**
+
+The classifier head must stay FP32 (via `llm_int8_skip_modules=["classifier"]`), otherwise all logits collapse to a constant and reranking is arbitrary. Run:
 
 Run: `uv run python -c "
 from rag_core.reranker import LocalBgeReranker
+from rag_core.models import Chunk, Source
+def src(d,i,t): return Source(document_id=d, document_title=i, chapter=t, course_code='IT1', kind='slide', language='vi')
+cs=[Chunk(source=src('d1','CSDL','c1'), text='Cơ sở dữ liệu là một tập hợp dữ liệu có tổ chức, được lưu trữ và truy xuất bằng hệ quản trị CSDL.'), Chunk(source=src('d2','OOP','c2'), text='Lập trình hướng đối tượng mô hình hóa thế giới thực bằng các đối tượng và lớp.'), Chunk(source=src('d3','Thuật toán','c3'), text='Thuật toán sắp xếp nổi bọt có độ phức tạp O(n^2).')]
 import torch
-r = LocalBgeReranker('BAAI/bge-reranker-v2-m3')
-torch.cuda.empty_cache()
-print('alloc MiB:', torch.cuda.memory_allocated() // 2**20)
-"` after temporarily forcing the FP32 path (or note the model file size 2.27 GB vs INT8 measurement).
-Expected: INT8 allocation is roughly 25-30% of FP32 (i.e. ~70-75% reduction).
+r=LocalBgeReranker()
+print('device:', r.device)
+ranked=r.rerank('Cơ sở dữ liệu là gì?', cs)
+print('top:', ranked[0].source.document_id)
+print('alloc MiB:', torch.cuda.memory_allocated()//2**20)
+"` after `uv run python scripts/smoke_reranker_int8.py`
+Expected: `device: cuda`, top-1 is `d1` (databases, i.e. the INT8 scores still separate relevant from irrelevant chunks — NOT collapsed to a constant), allocation well under 1 GiB.
 
-- [ ] **Step 4: Delete the smoke script**
+- [ ] **Step 4: Compare with FP32 to confirm the reduction**
+
+Load the model via the FP32 path (`from_pretrained(model)` then `.to("cuda")`) and measure `torch.cuda.memory_allocated()` after `torch.cuda.empty_cache()` (or note the model file size 2.27 GB).
+Expected: INT8 allocation is roughly 30-40% of FP32 (i.e. ~60-70% reduction; measured 804 MiB vs 2165 MiB in pre-verification).
+
+- [ ] **Step 5: Delete the smoke script**
 
 Run: `rm scripts/smoke_reranker_int8.py` and `rmdir scripts` if now empty. (Script was throwaway; keep the repo clean.)
 
-- [ ] **Step 5: Final verification**
+- [ ] **Step 6: Final verification**
 
 Run: `uv run pytest && uv run mypy rag_core/reranker.py`
 Expected: all tests pass, mypy clean.
 
-- [ ] **Step 6: Commit any remaining changes**
+- [ ] **Step 7: Commit any remaining changes**
 
 ```bash
 git add -A
-git commit -m "feat: verify INT8 reranker reduces GPU memory ~75%"
+git commit -m "feat: verify INT8 reranker cuts GPU memory ~60-70% with FP32 classifier head"
 ```
 
 ---

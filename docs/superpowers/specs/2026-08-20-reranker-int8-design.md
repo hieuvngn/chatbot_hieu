@@ -28,17 +28,22 @@ Use HuggingFace-native bitsandbytes 8-bit quantization:
 
 - Add `bitsandbytes` and `accelerate` to project dependencies (pyproject.toml).
 - In `LocalBgeReranker.__init__`, load the model with
-  `BitsAndBytesConfig(load_in_8bit=True)` and `device_map="auto"`; bitsandbytes
-  places the quantized model on GPU automatically, so the explicit `.to(device)`
-  call is removed.
+  `BitsAndBytesConfig(load_in_8bit=True, llm_int8_skip_modules=["classifier"])`
+  and `device_map="auto"`; bitsandbytes places the quantized model on GPU
+  automatically, so the explicit `.to(device)` call is removed.
+- The classifier (scoring head) is excluded from quantization (`llm_int8_skip_modules`):
+  a fully-quantized head collapses all logits to a near-constant (~9.0) for every
+  chunk, making reranking arbitrary. Keeping the head in FP32 restores
+  discriminating scores matching FP32 (measured: INT8 [8.90, −8.69, −10.83] vs
+  FP32 [8.98, −8.56, −10.78]) while the transformer body (the bulk of params)
+  stays 8-bit.
 - Tokenizer, `model.eval()`, and `rerank()` forward pass stay unchanged
   (interface unchanged: `rerank(query, chunks) -> list[Chunk]`).
 - Fallback: if CUDA is unavailable (or the bitsandbytes load raises), fall back
   to the existing FP32 path so the pipeline still works on CPU-only machines and
   preserves the current lazy-import property.
-- Expected memory: ~570 MB weights (+ small overhead for scale factors/compute
-  buffers, total roughly 600-800 MB on GPU), down from 2.27 GB FP32.
-- Expected accuracy impact: minimal for reranking (<0.5% score drift typical).
+- Expected memory: ~800 MiB measured (FP32 was 2165 MiB) — ~63% reduction.
+- Expected accuracy impact: none observed on the smoke input (logits match FP32).
 
 ## Files changed
 
@@ -55,6 +60,8 @@ Use HuggingFace-native bitsandbytes 8-bit quantization:
 
 - Run the test suite: `uv run pytest`.
 - Smoke test: load the real model once, rerank a small (query, chunk) list,
-  assert the ranked order is plausible and report measured GPU memory.
+  assert the ranked order is plausible and the scores still discriminate
+  (relevant chunk clearly ahead of irrelevant ones — not collapsed to a
+  constant), and report measured GPU memory.
 - Confirm the FP32 fallback still works on a CPU-only path (mocked/lint check:
   fallback branch reachable without CUDA).
