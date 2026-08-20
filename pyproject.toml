@@ -1,0 +1,18 @@
+[project]
+name = "coursemate-rag"
+version = "0.1.0"
+description = "CourseMate RAG chatbot: course advisory and knowledge Q&A grounded in study documents."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "mypy>=1.10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+files = ["generate_data.py", "tests"]
