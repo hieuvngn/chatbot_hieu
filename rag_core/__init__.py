@@ -5,6 +5,12 @@ from pathlib import Path
 
 import numpy as np
 
+from rag_core.answer_check import (
+    DEFAULT_UNSUPPORTED_FEEDBACK,
+    AnswerChecker,
+    CheckVerdict,
+    OpenRouterAnswerChecker,
+)
 from rag_core.chunking import CourseDict, DocumentDict, chunk_dataset
 from rag_core.config import Config, load_config
 from rag_core.embeddings import Embedder, OpenRouterEmbedder
@@ -19,7 +25,7 @@ from rag_core.judge import (
     OpenRouterQueryRewriter,
     QueryRewriter,
 )
-from rag_core.models import AnswerResult, Chunk, Session
+from rag_core.models import AnswerResult, Chunk, Session, Source
 from rag_core.reranker import (
     RERANK_INPUT_TOP_K,
     RERANK_KEEP_TOP_K,
@@ -44,12 +50,14 @@ class RagCore:
         reranker: Reranker | None = None,
         judge: Judge | None = None,
         rewriter: QueryRewriter | None = None,
+        checker: AnswerChecker | None = None,
     ) -> None:
         self._embedder = embedder
         self._generator = generator
         self._reranker = reranker
         self._judge = judge
         self._rewriter = rewriter
+        self._checker = checker
         self._index = index or self._build_index(data_dir, embedder)
 
     @staticmethod
@@ -93,19 +101,39 @@ class RagCore:
         judgment = judge.assess(refined, refined_chunks)
         if judgment.is_high:
             return self._generate_result(refined, refined_chunks)
-        return AnswerResult(
-            answer="",
-            citations=[],
-            sources=[],
-            refused=True,
-            rephrase_suggestion=judgment.rephrase_suggestion or DEFAULT_REPHRASE_SUGGESTION,
+        return self._refused_result(
+            judgment.rephrase_suggestion or DEFAULT_REPHRASE_SUGGESTION
         )
 
     def _generate_result(self, question: str, chunks: list[Chunk]) -> AnswerResult:
         sources = [chunk.source for chunk in chunks]
         answer_text = self._generator.generate(question, chunks)
+        if self._checker is None:
+            return self._answer_result(answer_text, sources)
+        verdict = self._checker.check(question, answer_text, chunks)
+        if verdict.supported:
+            return self._answer_result(answer_text, sources)
+        feedback = verdict.feedback or DEFAULT_UNSUPPORTED_FEEDBACK
+        regenerated = self._generator.generate(question, chunks, feedback=feedback)
+        verdict = self._checker.check(question, regenerated, chunks)
+        if verdict.supported:
+            return self._answer_result(regenerated, sources)
+        return self._refused_result(DEFAULT_REPHRASE_SUGGESTION)
+
+    @staticmethod
+    def _answer_result(answer_text: str, sources: list[Source]) -> AnswerResult:
         citations = parse_citations(answer_text, sources)
         return AnswerResult(answer=answer_text, citations=citations, sources=sources)
+
+    @staticmethod
+    def _refused_result(rephrase_suggestion: str) -> AnswerResult:
+        return AnswerResult(
+            answer="",
+            citations=[],
+            sources=[],
+            refused=True,
+            rephrase_suggestion=rephrase_suggestion,
+        )
 
 
 def build_rag_core(config: Config | None = None) -> RagCore:
@@ -133,6 +161,11 @@ def build_rag_core(config: Config | None = None) -> RagCore:
         model=config.llm_model,
         base_url=config.base_url,
     )
+    checker = OpenRouterAnswerChecker(
+        api_key=config.api_key,
+        model=config.llm_model,
+        base_url=config.base_url,
+    )
     return RagCore(
         config.data_dir,
         embedder,
@@ -140,6 +173,7 @@ def build_rag_core(config: Config | None = None) -> RagCore:
         reranker=reranker,
         judge=judge,
         rewriter=rewriter,
+        checker=checker,
     )
 
 
@@ -158,4 +192,7 @@ __all__ = [
     "OpenRouterQueryRewriter",
     "Judgment",
     "Level",
+    "AnswerChecker",
+    "OpenRouterAnswerChecker",
+    "CheckVerdict",
 ]

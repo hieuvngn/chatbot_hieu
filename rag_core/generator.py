@@ -27,7 +27,9 @@ def numbered_sources(chunks: list[Chunk]) -> str:
 
 
 class Generator(Protocol):
-    def generate(self, question: str, chunks: list[Chunk]) -> str: ...
+    def generate(
+        self, question: str, chunks: list[Chunk], feedback: str | None = None
+    ) -> str: ...
 
 
 class OpenRouterGenerator:
@@ -42,13 +44,20 @@ class OpenRouterGenerator:
         self._client = OpenAI(api_key=api_key, base_url=base_url)
         self._model = model
 
-    def generate(self, question: str, chunks: list[Chunk]) -> str:
+    def generate(
+        self, question: str, chunks: list[Chunk], feedback: str | None = None
+    ) -> str:
         numbered = numbered_sources(chunks)
         user_prompt = (
             f"Sources:\n{numbered}\n\n"
             f"Question: {question}\n\n"
             f"Answer the question using ONLY these sources, citing them as [1], [2], ..."
         )
+        if feedback:
+            user_prompt += (
+                "\n\nYour previous answer was rejected. "
+                f"Feedback: {feedback}"
+            )
         response = self._client.chat.completions.create(
             model=self._model,
             messages=[

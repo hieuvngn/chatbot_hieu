@@ -112,6 +112,18 @@ uv run python -m demo_crag "giải thích bảng băm là gì?"
 
 Prints the top-5 Sources, the judge's verdict, the refine rewrite with its re-retrieved top-5 and second verdict, and the final decision — a generated answer with citations or a refusal with a rephrase suggestion.
 
+## Answer check
+
+After generation, the generation-side quality gate verifies the draft answer claim-by-claim against the cited Sources. An LLM verifier checks that every claim is supported by a cited Source; if any claim is unsupported, the pipeline regenerates exactly once with concrete feedback naming the unsupported claims. If the regenerated answer still fails the check, the pipeline refuses with a rephrase suggestion — never serving an unverified answer. A valid answer passes through unchanged with its Citations intact. `build_rag_core()` wires the verifier in automatically.
+
+### Demo script
+
+```sh
+uv run python -m demo_answer_check "giải thích bảng băm là gì?"
+```
+
+Prints the top-5 Sources, the draft answer, the verifier's verdict with the named unsupported claims, the regeneration with feedback when the draft fails, and the final decision — a verified answer with citations or a refusal.
+
 ## Naive RAG core demo
 
 ```sh

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import generate_data as gd
 from rag_core import RagCore, Session
+from rag_core.answer_check import CheckVerdict, DEFAULT_UNSUPPORTED_FEEDBACK
 from rag_core.index import FINAL_TOP_K, dedupe_by_source
 from rag_core.judge import Judgment, Level
 from rag_core.models import Chunk, Source
@@ -76,10 +77,14 @@ class RecordingEmbedder:
 class FakeGenerator:
     def __init__(self) -> None:
         self.calls: list[tuple[str, list[Source]]] = []
+        self.feedbacks: list[str | None] = []
 
-    def generate(self, question: str, chunks: list[Chunk]) -> str:
+    def generate(
+        self, question: str, chunks: list[Chunk], feedback: str | None = None
+    ) -> str:
         sources = [chunk.source for chunk in chunks]
         self.calls.append((question, sources))
+        self.feedbacks.append(feedback)
         first_sentence = chunks[0].text.split(".")[0]
         return f"Trả lời về {sources[0].document_title}: {first_sentence}. [1]"
 
@@ -125,6 +130,18 @@ class FakeRewriter:
         return self.rewritten
 
 
+class FakeChecker:
+    """Returns verdicts from a script; records every check call."""
+
+    def __init__(self, verdicts: list[CheckVerdict]) -> None:
+        self.verdicts = verdicts
+        self.calls: list[tuple[str, str, list[Chunk]]] = []
+
+    def check(self, question: str, answer: str, chunks: list[Chunk]) -> CheckVerdict:
+        self.calls.append((question, answer, list(chunks)))
+        return self.verdicts[min(len(self.calls) - 1, len(self.verdicts) - 1)]
+
+
 def _content_tokens(text: str) -> list[str]:
     return [t for t in text.lower().split() if t not in STOPWORDS]
 
@@ -133,7 +150,8 @@ def make_core(tmp_path: Path, embedder: RecordingEmbedder | None = None,
               generator: FakeGenerator | None = None,
               reranker: FakeReranker | None = None,
               judge: FakeJudge | None = None,
-              rewriter: FakeRewriter | None = None) -> tuple[RagCore, gd.Dataset]:
+              rewriter: FakeRewriter | None = None,
+              checker: FakeChecker | None = None) -> tuple[RagCore, gd.Dataset]:
     ds = gd.generate(seed=SEED)
     gd.write(ds, tmp_path)
     core = RagCore(
@@ -143,6 +161,7 @@ def make_core(tmp_path: Path, embedder: RecordingEmbedder | None = None,
         reranker=reranker or FakeReranker(),
         judge=judge,
         rewriter=rewriter,
+        checker=checker,
     )
     return core, ds
 
@@ -427,3 +446,136 @@ def test_not_high_after_refine_refuses_without_second_refine(tmp_path: Path) -> 
     assert result.refused
     assert len(judge.calls) == 2
     assert len(rewriter.calls) == 1, "medium/low must trigger exactly one refine"
+
+
+def test_draft_answer_checked_claim_by_claim_against_sources(tmp_path: Path) -> None:
+    checker = FakeChecker(verdicts=[CheckVerdict(supported=True)])
+    generator = FakeGenerator()
+    core, _ = make_core(tmp_path, generator=generator, checker=checker)
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert not result.refused
+    assert len(generator.calls) == 1, "a supported draft must not be regenerated"
+    question, sources = generator.calls[0]
+    checked_question, checked_answer, checked_chunks = checker.calls[0]
+    assert len(checker.calls) == 1
+    assert checked_question == question
+    assert checked_answer == result.answer, "the returned answer is the checked draft"
+    assert [c.source for c in checked_chunks] == sources, (
+        "the check must verify the draft against the same Sources that were generated from"
+    )
+
+
+def test_valid_answer_returned_unchanged_with_citations(tmp_path: Path) -> None:
+    checker = FakeChecker(verdicts=[CheckVerdict(supported=True)])
+    core, _ = make_core(tmp_path, checker=checker)
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert not result.refused
+    assert result.citations, "a passing draft keeps its Citations"
+    source_ids = {(s.document_id, s.chapter) for s in result.sources}
+    for citation in result.citations:
+        assert (citation.source.document_id, citation.source.chapter) in source_ids
+
+
+def test_unsupported_draft_triggers_exactly_one_regeneration_with_feedback(tmp_path: Path) -> None:
+    feedback = "The claim 'X' is not supported by any cited source."
+    checker = FakeChecker(
+        verdicts=[
+            CheckVerdict(supported=False, feedback=feedback),
+            CheckVerdict(supported=True),
+        ]
+    )
+    generator = FakeGenerator()
+    core, _ = make_core(tmp_path, generator=generator, checker=checker)
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert not result.refused
+    assert result.answer
+    assert len(generator.calls) == 2, "a failed check must trigger exactly one regeneration"
+    assert generator.feedbacks == [None, feedback]
+    question1, sources1 = generator.calls[0]
+    question2, sources2 = generator.calls[1]
+    assert question1 == question2, "regeneration keeps the same question"
+    assert sources1 == sources2, "regeneration uses the same Sources"
+    assert len(checker.calls) == 2, "the regenerated answer must be checked again"
+    assert checker.calls[1][1] == result.answer, "the returned answer is the verified regeneration"
+
+
+def test_unsupported_draft_without_feedback_still_regenerates(tmp_path: Path) -> None:
+    checker = FakeChecker(
+        verdicts=[CheckVerdict(supported=False), CheckVerdict(supported=True)]
+    )
+    generator = FakeGenerator()
+    core, _ = make_core(tmp_path, generator=generator, checker=checker)
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert not result.refused
+    assert generator.feedbacks == [None, DEFAULT_UNSUPPORTED_FEEDBACK]
+
+
+def test_second_failure_produces_refusal_with_rephrase_suggestion(tmp_path: Path) -> None:
+    checker = FakeChecker(
+        verdicts=[
+            CheckVerdict(supported=False, feedback="Claim 'X' is unsupported."),
+            CheckVerdict(supported=False, feedback="Claim 'X' is unsupported."),
+        ]
+    )
+    generator = FakeGenerator()
+    core, _ = make_core(tmp_path, generator=generator, checker=checker)
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert result.refused
+    assert result.answer == ""
+    assert result.citations == []
+    assert result.sources == []
+    assert result.rephrase_suggestion
+    assert len(generator.calls) == 2, "exactly one regeneration before refusing"
+    assert len(checker.calls) == 2
+
+
+def test_answer_check_runs_after_judge_gate(tmp_path: Path) -> None:
+    judge = FakeJudge(levels=["high"])
+    checker = FakeChecker(verdicts=[CheckVerdict(supported=True)])
+    generator = FakeGenerator()
+    core, _ = make_core(
+        tmp_path,
+        generator=generator,
+        judge=judge,
+        rewriter=FakeRewriter(),
+        checker=checker,
+    )
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert not result.refused
+    assert len(judge.calls) == 1
+    assert len(generator.calls) == 1
+    _, _, checked_chunks = checker.calls[0]
+    assert [c.source for c in checked_chunks] == [c.source for c in judge.calls[0][1]], (
+        "the check must verify the answer against the judged top-5 Sources"
+    )
+
+
+def test_judge_refusal_never_reaches_answer_check(tmp_path: Path) -> None:
+    judge = FakeJudge(levels=["low", "low"])
+    checker = FakeChecker(verdicts=[CheckVerdict(supported=True)])
+    generator = FakeGenerator()
+    core, _ = make_core(
+        tmp_path,
+        generator=generator,
+        judge=judge,
+        rewriter=FakeRewriter(),
+        checker=checker,
+    )
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert result.refused
+    assert checker.calls == [], "the answer check must not run on a judge refusal"
+    assert generator.calls == [], "a judge refusal never reaches generation"
