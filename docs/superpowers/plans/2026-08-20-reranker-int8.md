@@ -106,7 +106,7 @@ def test_int8_load_used_when_cuda_available(monkeypatch) -> None:
     LocalBgeReranker("fake/model")
     assert captured["kwargs"]["quantization_config"].load_in_8bit is True
     assert captured["kwargs"]["device_map"] == "auto"
-    assert "to" in captured["kwargs"] or captured["kwargs"]["quantization_config"], (
+    assert "quantization_config" in captured["kwargs"], (
         "must pass quantization_config on CUDA"
     )
 
