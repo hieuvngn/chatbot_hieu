@@ -56,7 +56,7 @@ Tests assert the external contract of the generator: course count and fields, DA
 
 ## Naive RAG core
 
-The `rag_core` package ingests the synthetic data into chunks, builds a hybrid FAISS (dense) + BM25 (lexical) index, and answers questions through its single public entry point `answer(user_message, session)`. The pipeline order: hybrid retrieval (BM25 top-20 + dense top-20 fused by Reciprocal Rank Fusion at k=60) → generation from the top-5 Sources.
+The `rag_core` package ingests the synthetic data into chunks, builds a hybrid FAISS (dense) + BM25 (lexical) index, and answers questions through its single public entry point `answer(user_message, session)`. The pipeline order: hybrid retrieval (BM25 top-20 + dense top-20 fused by Reciprocal Rank Fusion at k=60) → re-ranking → generation from the top-5 Sources.
 
 ### Setup
 
@@ -66,7 +66,7 @@ Requires an OpenRouter API key. Create a `.env` file in the repo root:
 OPENROUTER_API_KEY=sk-or-...
 ```
 
-The embedding model (`nvidia/nemotron-3-embed-1b:free`, 2048-dim) and the LLM (`gpt-4o-mini`) both go through the OpenAI-compatible OpenRouter endpoint. Model names and the data directory are configurable via environment variables (`RAG_LLM_MODEL`, `RAG_EMBED_MODEL`, `RAG_EMBED_DIM`, `RAG_DATA_DIR`, `OPENROUTER_BASE_URL`).
+The embedding model (`nvidia/nemotron-3-embed-1b:free`, 2048-dim) and the LLM (`gpt-4o-mini`) both go through the OpenAI-compatible OpenRouter endpoint. Model names and the data directory are configurable via environment variables (`RAG_LLM_MODEL`, `RAG_EMBED_MODEL`, `RAG_EMBED_DIM`, `RAG_RERANK_MODEL`, `RAG_DATA_DIR`, `OPENROUTER_BASE_URL`).
 
 ### Usage
 
@@ -82,7 +82,19 @@ for citation in result.citations:
 
 `AnswerResult` carries the answer text, its `Citations` (the `[n]` markers in the answer mapped back to their Sources), and the ordered top-5 `Sources` used. All index units are embedded in a single batched request at build time; queries are embedded one per call.
 
+## Re-ranking
+
+Between retrieval and generation, the RRF-fused top-20 candidates are scored by a cross-encoder re-ranker (`BAAI/bge-reranker-v2-m3`) that runs locally on GPU (CPU fallback when CUDA is unavailable). The re-ranked top-10 chunks are deduplicated to the final top-5 Sources passed to generation, replacing the raw RRF top-5. `build_rag_core()` wires the re-ranker in automatically.
+
 ### Demo script
+
+```sh
+uv run python -m demo_rerank "giải thích bảng băm là gì?"
+```
+
+Prints the fused top-20 in pre-rerank order, the post-rerank top-10, the final top-5 Sources, and a generated answer with its citations, so the effect of this layer is visible side by side.
+
+## Naive RAG core demo
 
 ```sh
 uv run python -m demo_naive_rag "giải thích bảng băm là gì?"

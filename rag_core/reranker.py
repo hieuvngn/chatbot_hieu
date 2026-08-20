@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+from typing import Protocol
+
+from rag_core.config import DEFAULT_RERANK_MODEL
+from rag_core.models import Chunk
+
+RERANK_INPUT_TOP_K = 20
+RERANK_KEEP_TOP_K = 10
+
+
+class Reranker(Protocol):
+    """Scores a list of candidate chunks for a query, ordered best first."""
+
+    def rerank(self, query: str, chunks: list[Chunk]) -> list[Chunk]: ...
+
+
+class LocalBgeReranker:
+    """Cross-encoder re-ranker (BAAI/bge-reranker-v2-m3) run locally.
+
+    Loads on the local GPU when CUDA is available and falls back to CPU.
+    The heavy local-GPU stack (torch, transformers) is imported lazily so
+    the rest of the pipeline works without it installed.
+    """
+
+    def __init__(self, model_name: str = DEFAULT_RERANK_MODEL) -> None:
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        import torch
+
+        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._model_name = model_name
+        self._tokenizer = AutoTokenizer.from_pretrained(model_name)  # type: ignore[no-untyped-call]
+        self._model = AutoModelForSequenceClassification.from_pretrained(model_name).to(
+            self._device
+        )
+        self._model.eval()
+
+    @property
+    def device(self) -> str:
+        return self._device
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    def rerank(self, query: str, chunks: list[Chunk]) -> list[Chunk]:
+        import torch
+
+        pairs = [[query, chunk.text] for chunk in chunks]
+        inputs = self._tokenizer(
+            pairs,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+        ).to(self._device)
+        with torch.no_grad():
+            logits = self._model(**inputs).logits.squeeze(-1).float()
+        scores = logits.tolist()
+        ranked = sorted(zip(chunks, scores), key=lambda item: item[1], reverse=True)
+        return [chunk for chunk, _ in ranked]

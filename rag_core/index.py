@@ -17,6 +17,21 @@ def _tokenize(text: str) -> list[str]:
     return text.lower().split()
 
 
+def dedupe_by_source(chunks: list[Chunk], limit: int) -> list[Chunk]:
+    """Keep the highest-ranked chunk per (document, chapter), up to ``limit``."""
+    seen: set[tuple[str, str]] = set()
+    unique: list[Chunk] = []
+    for chunk in chunks:
+        key = (chunk.source.document_id, chunk.source.chapter)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(chunk)
+        if len(unique) >= limit:
+            break
+    return unique
+
+
 class LexicalScorer(Protocol):
     def get_scores(self, query: list[str]) -> list[float]: ...
 
@@ -81,21 +96,18 @@ class Index:
         return self._rrf_fusion([dense_rank, lexical_rank])
 
     def retrieve(self, query_text: str, query_vector: np.ndarray) -> list[Chunk]:
-        """Fuse dense top-20 and BM25 top-20 via RRF, dedupe to top-5 Sources."""
-        fused = self._rank(query_text, query_vector)
+        """Fuse dense top-20 and BM25 top-20 via RRF, dedupe to top-5 Sources.
 
-        seen: set[tuple[str, str]] = set()
-        sources: list[Chunk] = []
-        for chunk_id in fused:
-            chunk = self.chunks[chunk_id]
-            key = (chunk.source.document_id, chunk.source.chapter)
-            if key in seen:
-                continue
-            seen.add(key)
-            sources.append(chunk)
-            if len(sources) >= FINAL_TOP_K:
-                break
-        return sources
+        Deduplication runs over the full fused ranking so that up to five
+        distinct Sources are always returned when they exist.
+        """
+        fused = self._rank(query_text, query_vector)
+        return dedupe_by_source([self.chunks[i] for i in fused], FINAL_TOP_K)
+
+    def fused_candidates(self, query_text: str, query_vector: np.ndarray, k: int) -> list[Chunk]:
+        """The top-``k`` chunks of the fused ranking (dense + BM25 via RRF)."""
+        fused = self._rank(query_text, query_vector)
+        return [self.chunks[i] for i in fused[:k]]
 
     def fused_ranking(self, query_text: str, query_vector: np.ndarray) -> list[int]:
         """Return the fused chunk ranking (dense + BM25 via RRF) for demos and eval."""

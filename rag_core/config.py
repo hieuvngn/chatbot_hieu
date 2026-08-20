@@ -9,6 +9,7 @@ DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_LLM_MODEL = "gpt-4o-mini"
 DEFAULT_EMBED_MODEL = "nvidia/nemotron-3-embed-1b:free"
 DEFAULT_EMBED_DIM = 2048
+DEFAULT_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class Config:
     llm_model: str = DEFAULT_LLM_MODEL
     embed_model: str = DEFAULT_EMBED_MODEL
     embed_dim: int = DEFAULT_EMBED_DIM
+    rerank_model: str = DEFAULT_RERANK_MODEL
     base_url: str = DEFAULT_BASE_URL
 
 
@@ -51,5 +53,6 @@ def load_config(
         llm_model=os.environ.get("RAG_LLM_MODEL", DEFAULT_LLM_MODEL),
         embed_model=os.environ.get("RAG_EMBED_MODEL", DEFAULT_EMBED_MODEL),
         embed_dim=int(os.environ.get("RAG_EMBED_DIM", str(DEFAULT_EMBED_DIM))),
+        rerank_model=os.environ.get("RAG_RERANK_MODEL", DEFAULT_RERANK_MODEL),
         base_url=os.environ.get("OPENROUTER_BASE_URL", DEFAULT_BASE_URL),
     )
