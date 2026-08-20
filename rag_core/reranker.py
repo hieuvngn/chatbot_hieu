@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from typing import Protocol
+import logging
+from typing import Any, Protocol
 
 from rag_core.config import DEFAULT_RERANK_MODEL
 from rag_core.models import Chunk
+
+logger = logging.getLogger(__name__)
 
 RERANK_INPUT_TOP_K = 20
 RERANK_KEEP_TOP_K = 10
@@ -28,12 +31,38 @@ class LocalBgeReranker:
 
         import torch
 
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        def load_fp32() -> Any:
+            return AutoModelForSequenceClassification.from_pretrained(model_name).to(
+                "cpu"
+            )
+
         self._model_name = model_name
         self._tokenizer = AutoTokenizer.from_pretrained(model_name)  # type: ignore[no-untyped-call]
-        self._model = AutoModelForSequenceClassification.from_pretrained(model_name).to(
-            self._device
-        )
+        if torch.cuda.is_available():
+            from transformers import BitsAndBytesConfig
+
+            try:
+                quantization_config = BitsAndBytesConfig(  # type: ignore[no-untyped-call]
+                    load_in_8bit=True,
+                    llm_int8_skip_modules=["classifier"],
+                )
+                self._model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name,
+                    quantization_config=quantization_config,
+                    device_map="auto",
+                )
+                self._device = "cuda"
+            except Exception as exc:
+                self._model = load_fp32()
+                self._device = "cpu"
+                logger.warning(
+                    "INT8 load failed (%s); falling back to FP32 on %s",
+                    exc,
+                    self._device,
+                )
+        else:
+            self._model = load_fp32()
+            self._device = "cpu"
         self._model.eval()
 
     @property
