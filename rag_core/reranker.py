@@ -28,12 +28,29 @@ class LocalBgeReranker:
 
         import torch
 
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
         self._model_name = model_name
         self._tokenizer = AutoTokenizer.from_pretrained(model_name)  # type: ignore[no-untyped-call]
-        self._model = AutoModelForSequenceClassification.from_pretrained(model_name).to(
-            self._device
-        )
+        if torch.cuda.is_available():
+            from transformers import BitsAndBytesConfig
+
+            try:
+                quantization_config = BitsAndBytesConfig(load_in_8bit=True)  # type: ignore[no-untyped-call]
+                self._model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name,
+                    quantization_config=quantization_config,
+                    device_map="auto",
+                )
+                self._device = "cuda"
+            except Exception:
+                self._model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name
+                ).to("cpu")
+                self._device = "cpu"
+        else:
+            self._model = AutoModelForSequenceClassification.from_pretrained(
+                model_name
+            ).to("cpu")
+            self._device = "cpu"
         self._model.eval()
 
     @property
