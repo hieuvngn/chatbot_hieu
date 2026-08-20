@@ -7,6 +7,7 @@ from pathlib import Path
 import generate_data as gd
 from rag_core import RagCore, Session
 from rag_core.index import FINAL_TOP_K, dedupe_by_source
+from rag_core.judge import Judgment, Level
 from rag_core.models import Chunk, Source
 from rag_core.reranker import RERANK_KEEP_TOP_K
 
@@ -98,13 +99,41 @@ class FakeReranker:
         return output
 
 
+class FakeJudge:
+    """Returns verdicts from a script; records every call."""
+
+    def __init__(self, levels: list[Level], suggestion: str = "Hãy thử hỏi với từ khóa khác.") -> None:
+        self.levels = levels
+        self.suggestion = suggestion
+        self.calls: list[tuple[str, list[Chunk]]] = []
+
+    def assess(self, query: str, chunks: list[Chunk]) -> Judgment:
+        self.calls.append((query, list(chunks)))
+        level = self.levels[min(len(self.calls) - 1, len(self.levels) - 1)]
+        return Judgment(level=level, rephrase_suggestion=self.suggestion)
+
+
+class FakeRewriter:
+    """Returns a fixed rewrite and records the queries it was asked to rewrite."""
+
+    def __init__(self, rewritten: str = "bảng băm") -> None:
+        self.rewritten = rewritten
+        self.calls: list[str] = []
+
+    def rewrite(self, query: str) -> str:
+        self.calls.append(query)
+        return self.rewritten
+
+
 def _content_tokens(text: str) -> list[str]:
     return [t for t in text.lower().split() if t not in STOPWORDS]
 
 
 def make_core(tmp_path: Path, embedder: RecordingEmbedder | None = None,
               generator: FakeGenerator | None = None,
-              reranker: FakeReranker | None = None) -> tuple[RagCore, gd.Dataset]:
+              reranker: FakeReranker | None = None,
+              judge: FakeJudge | None = None,
+              rewriter: FakeRewriter | None = None) -> tuple[RagCore, gd.Dataset]:
     ds = gd.generate(seed=SEED)
     gd.write(ds, tmp_path)
     core = RagCore(
@@ -112,6 +141,8 @@ def make_core(tmp_path: Path, embedder: RecordingEmbedder | None = None,
         embedder=embedder or RecordingEmbedder(),
         generator=generator or FakeGenerator(),
         reranker=reranker or FakeReranker(),
+        judge=judge,
+        rewriter=rewriter,
     )
     return core, ds
 
@@ -295,3 +326,104 @@ def test_answer_without_reranker_uses_rrf_top_five(tmp_path: Path) -> None:
     assert [(s.document_id, s.chapter) for s in naive_result.sources] == [
         (s.document_id, s.chapter) for s in reranked_result.sources
     ], "without a reranker, answer() falls back to the raw RRF top-5"
+
+
+def test_high_judgment_answers_without_refine(tmp_path: Path) -> None:
+    judge = FakeJudge(levels=["high"])
+    rewriter = FakeRewriter()
+    generator = FakeGenerator()
+    core, _ = make_core(tmp_path, generator=generator, judge=judge, rewriter=rewriter)
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert not result.refused
+    assert result.answer
+    assert len(judge.calls) == 1
+    assert rewriter.calls == []
+    assert len(generator.calls) == 1
+    question, _ = generator.calls[0]
+    assert question == "giải thích bảng băm là gì?"
+
+
+def test_judge_scores_the_top_five_sources(tmp_path: Path) -> None:
+    judge = FakeJudge(levels=["high"])
+    generator = FakeGenerator()
+    core, _ = make_core(tmp_path, generator=generator, judge=judge, rewriter=FakeRewriter())
+
+    core.answer("giải thích bảng băm là gì?", session())
+
+    judge_query, judged = judge.calls[0]
+    assert judge_query == "giải thích bảng băm là gì?"
+    assert len(judged) == 5, "the judge must assess the top-5 Sources"
+    assert len({(c.source.document_id, c.source.chapter) for c in judged}) == len(judged)
+    _, gen_sources = generator.calls[0]
+    assert [c.source for c in judged] == gen_sources
+
+
+def test_medium_judgment_triggers_one_refine_then_grounded_answer(tmp_path: Path) -> None:
+    judge = FakeJudge(levels=["medium", "high"])
+    rewriter = FakeRewriter(rewritten="bảng băm cấu trúc dữ liệu")
+    generator = FakeGenerator()
+    embedder = RecordingEmbedder()
+    core, _ = make_core(tmp_path, embedder=embedder, generator=generator,
+                        judge=judge, rewriter=rewriter)
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert not result.refused
+    assert result.answer
+    assert len(judge.calls) == 2
+    assert [q for q, _ in judge.calls] == [
+        "giải thích bảng băm là gì?",
+        "bảng băm cấu trúc dữ liệu",
+    ]
+    assert rewriter.calls == ["giải thích bảng băm là gì?"]
+    assert embedder.query_calls == 2, "the refine must re-embed the rewritten query"
+    assert len(generator.calls) == 1
+    question, _ = generator.calls[0]
+    assert question == "bảng băm cấu trúc dữ liệu"
+
+
+def test_ambiguous_query_refines_to_grounded_answer(tmp_path: Path) -> None:
+    judge = FakeJudge(levels=["low", "high"])
+    rewriter = FakeRewriter(rewritten="bảng băm")
+    generator = FakeGenerator()
+    core, _ = make_core(tmp_path, generator=generator, judge=judge, rewriter=rewriter)
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert not result.refused
+    assert result.answer
+    assert len(generator.calls) == 1
+    question, _ = generator.calls[0]
+    assert question == "bảng băm"
+
+
+def test_low_judgment_refuses_after_single_refine(tmp_path: Path) -> None:
+    judge = FakeJudge(levels=["low", "low"])
+    rewriter = FakeRewriter()
+    generator = FakeGenerator()
+    core, _ = make_core(tmp_path, generator=generator, judge=judge, rewriter=rewriter)
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert result.refused
+    assert result.answer == ""
+    assert result.citations == []
+    assert result.sources == []
+    assert result.rephrase_suggestion
+    assert generator.calls == [], "a refusal must not call the generator"
+    assert len(judge.calls) == 2
+    assert rewriter.calls == ["giải thích bảng băm là gì?"]
+
+
+def test_not_high_after_refine_refuses_without_second_refine(tmp_path: Path) -> None:
+    judge = FakeJudge(levels=["medium", "medium"])
+    rewriter = FakeRewriter()
+    core, _ = make_core(tmp_path, judge=judge, rewriter=rewriter)
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert result.refused
+    assert len(judge.calls) == 2
+    assert len(rewriter.calls) == 1, "medium/low must trigger exactly one refine"

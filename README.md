@@ -94,6 +94,24 @@ uv run python -m demo_rerank "giải thích bảng băm là gì?"
 
 Prints the fused top-20 in pre-rerank order, the post-rerank top-10, the final top-5 Sources, and a generated answer with its citations, so the effect of this layer is visible side by side.
 
+## CRAG judge
+
+Between re-ranking and generation, the quality gate decides whether the retrieved top-5 Sources are trustworthy enough to answer from. An LLM judge scores them high / medium / low:
+
+- **high** — the sources directly answer the question; the pipeline answers from them as-is.
+- **medium / low** — the pipeline Refines exactly once: a query rewrite (exact keywords, pronouns dropped) followed by a full re-retrieval and re-ranking. If the judge is still not high after that single refine, the pipeline refuses with a rephrase suggestion.
+- A refusal returns an empty answer with no Citations and never calls the generator — no hallucinated or unsupported answer is ever served.
+
+The `AnswerResult` carries two extra fields when it refuses: `refused=True` and a `rephrase_suggestion`. `build_rag_core()` wires the judge and rewriter in automatically.
+
+### Demo script
+
+```sh
+uv run python -m demo_crag "giải thích bảng băm là gì?"
+```
+
+Prints the top-5 Sources, the judge's verdict, the refine rewrite with its re-retrieved top-5 and second verdict, and the final decision — a generated answer with citations or a refusal with a rephrase suggestion.
+
 ## Naive RAG core demo
 
 ```sh

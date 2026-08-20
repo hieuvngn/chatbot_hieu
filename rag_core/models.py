@@ -30,6 +30,8 @@ class AnswerResult:
     answer: str
     citations: list[Citation]
     sources: list[Source]
+    refused: bool = False
+    rephrase_suggestion: str = ""
 
 
 @dataclass

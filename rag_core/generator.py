@@ -18,6 +18,14 @@ _SYSTEM_PROMPT = (
 _CITATION_PATTERN = re.compile(r"\[(\d+)\]")
 
 
+def numbered_sources(chunks: list[Chunk]) -> str:
+    """The numbered source list shared by every prompt that presents chunks."""
+    return "\n\n".join(
+        f"[{i}] ({chunk.source.document_title}, {chunk.source.chapter}):\n{chunk.text}"
+        for i, chunk in enumerate(chunks, start=1)
+    )
+
+
 class Generator(Protocol):
     def generate(self, question: str, chunks: list[Chunk]) -> str: ...
 
@@ -35,10 +43,7 @@ class OpenRouterGenerator:
         self._model = model
 
     def generate(self, question: str, chunks: list[Chunk]) -> str:
-        numbered = "\n\n".join(
-            f"[{i}] ({chunk.source.document_title}, {chunk.source.chapter}):\n{chunk.text}"
-            for i, chunk in enumerate(chunks, start=1)
-        )
+        numbered = numbered_sources(chunks)
         user_prompt = (
             f"Sources:\n{numbered}\n\n"
             f"Question: {question}\n\n"

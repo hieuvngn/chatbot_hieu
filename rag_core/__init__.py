@@ -10,6 +10,15 @@ from rag_core.config import Config, load_config
 from rag_core.embeddings import Embedder, OpenRouterEmbedder
 from rag_core.generator import Generator, OpenRouterGenerator, parse_citations
 from rag_core.index import FINAL_TOP_K, Index, dedupe_by_source
+from rag_core.judge import (
+    DEFAULT_REPHRASE_SUGGESTION,
+    Judge,
+    Judgment,
+    Level,
+    OpenRouterJudge,
+    OpenRouterQueryRewriter,
+    QueryRewriter,
+)
 from rag_core.models import AnswerResult, Chunk, Session
 from rag_core.reranker import (
     RERANK_INPUT_TOP_K,
@@ -33,10 +42,14 @@ class RagCore:
         generator: Generator,
         index: Index | None = None,
         reranker: Reranker | None = None,
+        judge: Judge | None = None,
+        rewriter: QueryRewriter | None = None,
     ) -> None:
         self._embedder = embedder
         self._generator = generator
         self._reranker = reranker
+        self._judge = judge
+        self._rewriter = rewriter
         self._index = index or self._build_index(data_dir, embedder)
 
     @staticmethod
@@ -58,8 +71,39 @@ class RagCore:
         query_vector = np.asarray(self._embedder.embed_query(user_message), dtype=np.float32)
         retrieved = self._retrieve_sources(user_message, query_vector)
 
-        sources = [chunk.source for chunk in retrieved]
-        answer_text = self._generator.generate(user_message, retrieved)
+        if self._judge is not None and self._rewriter is not None:
+            return self._gated_answer(user_message, retrieved, self._judge, self._rewriter)
+        return self._generate_result(user_message, retrieved)
+
+    def _gated_answer(
+        self,
+        question: str,
+        chunks: list[Chunk],
+        judge: Judge,
+        rewriter: QueryRewriter,
+    ) -> AnswerResult:
+        judgment = judge.assess(question, chunks)
+        if judgment.is_high:
+            return self._generate_result(question, chunks)
+        refined = rewriter.rewrite(question)
+        refined_vector = np.asarray(
+            self._embedder.embed_query(refined), dtype=np.float32
+        )
+        refined_chunks = self._retrieve_sources(refined, refined_vector)
+        judgment = judge.assess(refined, refined_chunks)
+        if judgment.is_high:
+            return self._generate_result(refined, refined_chunks)
+        return AnswerResult(
+            answer="",
+            citations=[],
+            sources=[],
+            refused=True,
+            rephrase_suggestion=judgment.rephrase_suggestion or DEFAULT_REPHRASE_SUGGESTION,
+        )
+
+    def _generate_result(self, question: str, chunks: list[Chunk]) -> AnswerResult:
+        sources = [chunk.source for chunk in chunks]
+        answer_text = self._generator.generate(question, chunks)
         citations = parse_citations(answer_text, sources)
         return AnswerResult(answer=answer_text, citations=citations, sources=sources)
 
@@ -79,7 +123,24 @@ def build_rag_core(config: Config | None = None) -> RagCore:
         base_url=config.base_url,
     )
     reranker = LocalBgeReranker(model_name=config.rerank_model)
-    return RagCore(config.data_dir, embedder, generator, reranker=reranker)
+    judge = OpenRouterJudge(
+        api_key=config.api_key,
+        model=config.llm_model,
+        base_url=config.base_url,
+    )
+    rewriter = OpenRouterQueryRewriter(
+        api_key=config.api_key,
+        model=config.llm_model,
+        base_url=config.base_url,
+    )
+    return RagCore(
+        config.data_dir,
+        embedder,
+        generator,
+        reranker=reranker,
+        judge=judge,
+        rewriter=rewriter,
+    )
 
 
 __all__ = [
@@ -91,4 +152,10 @@ __all__ = [
     "Chunk",
     "Reranker",
     "LocalBgeReranker",
+    "Judge",
+    "OpenRouterJudge",
+    "QueryRewriter",
+    "OpenRouterQueryRewriter",
+    "Judgment",
+    "Level",
 ]
