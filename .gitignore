@@ -5,3 +5,10 @@ __pycache__/
 .mypy_cache/
 *.egg-info/
 data/
+.agent/
+.scratch/
+AGENTS.md 
+CONTEXT.md 
+skills-lock.json
+
+.worktrees/
