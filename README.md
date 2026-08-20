@@ -53,3 +53,39 @@ uv run pytest
 ```
 
 Tests assert the external contract of the generator: course count and fields, DAG acyclicity, document count, bilingual mix, that content references its course and topics, and that output is deterministic for a fixed seed.
+
+## Naive RAG core
+
+The `rag_core` package ingests the synthetic data into chunks, builds a hybrid FAISS (dense) + BM25 (lexical) index, and answers questions through its single public entry point `answer(user_message, session)`. The pipeline order: hybrid retrieval (BM25 top-20 + dense top-20 fused by Reciprocal Rank Fusion at k=60) → generation from the top-5 Sources.
+
+### Setup
+
+Requires an OpenRouter API key. Create a `.env` file in the repo root:
+
+```sh
+OPENROUTER_API_KEY=sk-or-...
+```
+
+The embedding model (`nvidia/nemotron-3-embed-1b:free`, 2048-dim) and the LLM (`gpt-4o-mini`) both go through the OpenAI-compatible OpenRouter endpoint. Model names and the data directory are configurable via environment variables (`RAG_LLM_MODEL`, `RAG_EMBED_MODEL`, `RAG_EMBED_DIM`, `RAG_DATA_DIR`, `OPENROUTER_BASE_URL`).
+
+### Usage
+
+```python
+from rag_core import build_rag_core, Session
+
+core = build_rag_core()
+result = core.answer("giải thích bảng băm là gì?", Session(id="s1", user_id="u1", turns=[]))
+print(result.answer)
+for citation in result.citations:
+    print(citation.marker, citation.source.document_id, citation.source.chapter)
+```
+
+`AnswerResult` carries the answer text, its `Citations` (the `[n]` markers in the answer mapped back to their Sources), and the ordered top-5 `Sources` used. All index chunks are embedded in a single batched request at build time; queries are embedded one per call.
+
+### Demo script
+
+```sh
+uv run python -m demo_naive_rag "giải thích bảng băm là gì?"
+```
+
+Prints the chunk count, the single-batched embedding step, the fused retrieval ranking, and a generated answer with its citations.
