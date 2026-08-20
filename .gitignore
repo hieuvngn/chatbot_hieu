@@ -12,3 +12,5 @@ CONTEXT.md
 skills-lock.json
 
 .worktrees/
+
+.superpowers/
