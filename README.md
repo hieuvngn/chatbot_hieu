@@ -44,7 +44,7 @@ The script writes two JSON files into the output directory:
 
 ### Data integrity
 
-The prerequisite graph is a DAG by construction (prerequisites only ever reference strictly-earlier-semester courses). `generate_data.py` runs a topological sort after generation and raises an `AssertionError` if a cycle is ever introduced.
+The prerequisite graph is a DAG by construction: every prerequisite strictly precedes its course in semester order. `generate_data.py` enforces this invariant after generation (it raises an `AssertionError` if a prerequisite is unknown, not strictly earlier, or part of a cycle).
 
 ### Tests
 

@@ -180,8 +180,8 @@ TOPICS: dict[str, list[tuple[str, str]]] = {
 
 
 # Semester, code, vi name, en name, credits, department, prerequisites.
-# Prerequisites always reference strictly-earlier semesters, so the graph is
-# a DAG by construction.
+# Every prerequisite strictly precedes its course in semester order, so the
+# graph is a DAG by construction; assert_no_cycles() enforces the invariant.
 COURSE_TABLE: list[tuple[int, str, str, str, int, str, list[str]]] = [
     (1, "CS101", "Nhập môn lập trình", "Introduction to Programming", 3, "Khoa Công nghệ thông tin", []),
     (1, "CS102", "Toán rời rạc", "Discrete Mathematics", 3, "Khoa Công nghệ thông tin", []),
@@ -212,7 +212,7 @@ COURSE_TABLE: list[tuple[int, str, str, str, int, str, list[str]]] = [
     (5, "CS313", "Phát triển ứng dụng di động", "Mobile Application Development", 3, "Khoa Công nghệ thông tin", ["CS212"]),
     (5, "CS314", "Đồ họa máy tính", "Computer Graphics", 3, "Khoa Công nghệ thông tin", ["MATH111", "CS112"]),
     (5, "CS315", "Kiểm thử phần mềm", "Software Testing", 3, "Khoa Công nghệ thông tin", ["CS222"]),
-    (5, "CS316", "Dữ liệu lớn", "Big Data", 3, "Khoa Công nghệ thông tin", ["CS211", "CS311"]),
+    (5, "CS316", "Dữ liệu lớn", "Big Data", 3, "Khoa Công nghệ thông tin", ["CS211", "CS223"]),
     (6, "CS321", "Học sâu", "Deep Learning", 4, "Khoa Công nghệ thông tin", ["CS311"]),
     (6, "CS322", "Phân tích dữ liệu", "Data Analytics", 3, "Khoa Công nghệ thông tin", ["STAT101", "CS316"]),
     (6, "CS323", "Điện toán đám mây", "Cloud Computing", 3, "Khoa Công nghệ thông tin", ["CS213", "CS316"]),
@@ -264,10 +264,13 @@ def _build_courses(rng: random.Random) -> list[Course]:
 
 def assert_no_cycles(courses: Sequence[Course]) -> None:
     """Topological sort; raises AssertionError if the prerequisite graph cycles."""
-    codes = {c.code for c in courses}
+    codes = {c.code: c for c in courses}
     for c in courses:
         for prereq in c.prerequisites:
             assert prereq in codes, f"{c.code} depends on unknown course {prereq}"
+            assert (
+                codes[prereq].semester < c.semester
+            ), f"{c.code} (semester {c.semester}) depends on {prereq} (semester {codes[prereq].semester})"
 
     indegree = {c.code: 0 for c in courses}
     dependents: dict[str, list[str]] = {c.code: [] for c in courses}
@@ -289,48 +292,73 @@ def assert_no_cycles(courses: Sequence[Course]) -> None:
     assert len(visited) == len(courses), "prerequisite graph contains a cycle"
 
 
-def _sentence(topic_vi: str, topic_en: str, language: str, course: Course) -> str:
+def _section_content(topic_vi: str, topic_en: str, language: str, course: Course, index: int) -> str:
     if language == "vi":
         return (
             f"{topic_vi} là một nội dung quan trọng trong môn {course.name} ({course.code}). "
-            f"Trong phần này, sinh viên sẽ tìm hiểu khái niệm, cách vận dụng và các ví dụ "
-            f"minh họa về {topic_vi}."
+            f"Trong phần {index}, sinh viên sẽ tìm hiểu khái niệm, cách vận dụng và các ví dụ "
+            f"minh họa về {topic_vi}.\n\n"
+            f"Đầu tiên, cần phân biệt {topic_vi} với các khái niệm liên quan đã học ở những "
+            f"phần trước của học phần. Việc nắm vững định nghĩa chính xác giúp tránh những "
+            f"hiểu lầm phổ biến khi làm bài tập vận dụng.\n\n"
+            f"Tiếp theo, bài giảng trình bày một số thuật toán và kỹ thuật tiêu biểu liên quan "
+            f"đến {topic_vi}, kèm theo phân tích độ phức tạp và so sánh giữa các cách tiếp cận.\n\n"
+            f"Cuối phần, có các ví dụ minh họa từng bước và bài tập tự luyện để sinh viên "
+            f"kiểm tra mức độ hiểu bài trước khi chuyển sang nội dung kế tiếp."
         )
     return (
         f"{topic_en} is an important topic in {course.name_en} ({course.code}). "
-        f"This section covers the concept of {topic_en}, how it is applied, and "
-        f"worked examples."
+        f"Section {index} covers the concept of {topic_en}, how it is applied, and "
+        f"worked examples.\n\n"
+        f"First, we distinguish {topic_en} from related concepts covered in earlier "
+        f"sections of the module. A precise definition prevents common misunderstandings "
+        f"when solving applied exercises.\n\n"
+        f"Next, the lecture presents representative algorithms and techniques related to "
+        f"{topic_en}, with complexity analysis and a comparison of alternative approaches.\n\n"
+        f"The section closes with step-by-step examples and practice problems so students "
+        f"can self-assess before moving on."
     )
 
 
-def _intro_sentence(language: str, course: Course, kind: str) -> str:
+def _intro_section(language: str, course: Course, kind: str) -> str:
     label_vi = "slide" if kind == "slides" else "chương"
     label_en = "slide" if kind == "slides" else "chapter"
     if language == "vi":
         return (
             f"Tài liệu này thuộc môn {course.name} ({course.code}) của "
             f"{course.department}. Đây là {label_vi} giới thiệu tổng quan nội dung "
-            f"học phần, gồm các khái niệm cốt lõi và bài tập vận dụng."
+            f"học phần, gồm các khái niệm cốt lõi và bài tập vận dụng.\n\n"
+            f"Học phần có {course.credits} tín chỉ, được giảng dạy ở học kỳ "
+            f"{course.semester}. Người học cần nắm vững các môn nền tảng trước khi bắt đầu.\n\n"
+            f"Mục tiêu của {label_vi} này là giúp sinh viên hình dung toàn bộ mạch kiến thức, "
+            f"từ đó biết phần nào là trọng tâm để ưu tiên thời gian ôn tập."
         )
     return (
         f"This material belongs to {course.name_en} ({course.code}), offered by "
         f"{course.department}. This {label_en} introduces the module overview, its "
-        f"core concepts, and practice exercises."
+        f"core concepts, and practice exercises.\n\n"
+        f"The module carries {course.credits} credits and is taught in semester "
+        f"{course.semester}. Students should master the foundation modules first.\n\n"
+        f"The goal of this {label_en} is to map the knowledge flow of the whole module "
+        f"so students know which parts deserve the most review time."
     )
 
 
-def _summary_sentence(language: str, course: Course, topics: list[tuple[str, str]]) -> str:
+def _summary_section(language: str, course: Course, topics: list[tuple[str, str]]) -> str:
     if language == "vi":
         names = ", ".join(t for t, _ in topics[:3])
         return (
             f"Tóm lại, môn {course.name} ({course.code}) giúp sinh viên nắm vững các "
-            f"nội dung như {names}. Hãy xem thêm bài giảng tiếp theo và tài liệu tham "
-            f"khảo của học phần."
+            f"nội dung như {names}.\n\n"
+            f"Các phần tiếp theo của học phần sẽ mở rộng những khái niệm này, vì vậy "
+            f"người học nên xem lại bài giảng hiện tại trước khi đọc tài liệu tham khảo "
+            f"và bài giảng kế tiếp."
         )
     names = ", ".join(t for _, t in topics[:3])
     return (
-        f"In summary, {course.name_en} ({course.code}) covers topics such as {names}. "
-        f"See the next lecture and the module references for details."
+        f"In summary, {course.name_en} ({course.code}) covers topics such as {names}.\n\n"
+        f"Later sections of the module build on these concepts, so students should "
+        f"review this lecture before moving on to the references and the next lecture."
     )
 
 
@@ -348,18 +376,18 @@ def _document_for_course(rng: random.Random, course: Course, kind: str, language
         title = f"{type_label}: {course.name_en} ({course.code})"
 
     chapters = [Chapter(id=f"{doc_id}-c1", title="Giới thiệu" if language == "vi" else "Introduction",
-                        content=_intro_sentence(language, course, kind))]
+                        content=_intro_section(language, course, kind))]
     for i, (tvi, ten) in enumerate(selected, start=2):
         topic_title = tvi if language == "vi" else ten
         chapters.append(
             Chapter(id=f"{doc_id}-c{i}",
                     title=f"Phần {i - 1}: {topic_title}" if language == "vi" else f"Section {i - 1}: {topic_title}",
-                    content=_sentence(tvi, ten, language, course))
+                    content=_section_content(tvi, ten, language, course, i - 1))
         )
     chapters.append(
         Chapter(id=f"{doc_id}-c{len(chapters) + 1}",
                 title="Tóm tắt" if language == "vi" else "Summary",
-                content=_summary_sentence(language, course, selected))
+                content=_summary_section(language, course, selected))
     )
     return Document(id=doc_id, course_code=course.code, title=title, kind=kind, language=language,
                     chapters=chapters)
