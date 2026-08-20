@@ -1,0 +1,122 @@
+[
+  {
+    "id": "eval-001",
+    "question": "IoT là gì và nó được ứng dụng trong hệ thống nhúng như thế nào?",
+    "language": "vi",
+    "ground_truth": { "document_id": "DOC-004", "chapter": "Phần 1: IoT" }
+  },
+  {
+    "id": "eval-002",
+    "question": "Engine đóng vai trò gì trong quá trình phát triển game?",
+    "language": "vi",
+    "ground_truth": { "document_id": "DOC-007", "chapter": "Phần 3: engine" }
+  },
+  {
+    "id": "eval-003",
+    "question": "Giải thích cấu trúc điều khiển trong lập trình.",
+    "language": "vi",
+    "ground_truth": { "document_id": "DOC-009", "chapter": "Phần 2: cấu trúc điều khiển" }
+  },
+  {
+    "id": "eval-004",
+    "question": "Ma trận là gì? Giải thích khái niệm và cách vận dụng của nó.",
+    "language": "vi",
+    "ground_truth": { "document_id": "DOC-011", "chapter": "Phần 1: ma trận" }
+  },
+  {
+    "id": "eval-005",
+    "question": "Lan truyền ngược trong mạng nơ-ron hoạt động như thế nào?",
+    "language": "vi",
+    "ground_truth": { "document_id": "DOC-013", "chapter": "Phần 1: lan truyền ngược" }
+  },
+  {
+    "id": "eval-006",
+    "question": "Các kỹ thuật xâm nhập trong an ninh mạng là gì?",
+    "language": "vi",
+    "ground_truth": { "document_id": "DOC-020", "chapter": "Phần 4: xâm nhập" }
+  },
+  {
+    "id": "eval-007",
+    "question": "Kiểm thử tự động giúp ích gì trong kiểm thử phần mềm?",
+    "language": "vi",
+    "ground_truth": { "document_id": "DOC-026", "chapter": "Phần 2: kiểm thử tự động" }
+  },
+  {
+    "id": "eval-008",
+    "question": "Con trỏ trong lập trình hệ thống là gì và dùng để làm gì?",
+    "language": "vi",
+    "ground_truth": { "document_id": "DOC-032", "chapter": "Phần 1: con trỏ" }
+  },
+  {
+    "id": "eval-009",
+    "question": "Giao thức TCP hoạt động như thế nào trong mạng máy tính?",
+    "language": "vi",
+    "ground_truth": { "document_id": "DOC-033", "chapter": "Phần 2: TCP" }
+  },
+  {
+    "id": "eval-010",
+    "question": "Phương pháp ghi chú hiệu quả khi học đại học là gì?",
+    "language": "vi",
+    "ground_truth": { "document_id": "DOC-040", "chapter": "Phần 4: ghi chú" }
+  },
+  {
+    "id": "eval-011",
+    "question": "What is optimization and what role does the objective function play?",
+    "language": "en",
+    "ground_truth": { "document_id": "DOC-001", "chapter": "Section 2: optimization" }
+  },
+  {
+    "id": "eval-012",
+    "question": "Explain the role of logic in discrete mathematics.",
+    "language": "en",
+    "ground_truth": { "document_id": "DOC-003", "chapter": "Section 3: logic" }
+  },
+  {
+    "id": "eval-013",
+    "question": "How does forecasting work in data analytics?",
+    "language": "en",
+    "ground_truth": { "document_id": "DOC-005", "chapter": "Section 2: forecasting" }
+  },
+  {
+    "id": "eval-014",
+    "question": "What is virtualization in cloud computing?",
+    "language": "en",
+    "ground_truth": { "document_id": "DOC-014", "chapter": "Section 2: virtualization" }
+  },
+  {
+    "id": "eval-015",
+    "question": "What is tokenization in natural language processing?",
+    "language": "en",
+    "ground_truth": { "document_id": "DOC-018", "chapter": "Section 4: tokenization" }
+  },
+  {
+    "id": "eval-016",
+    "question": "Explain the stack data structure and its main operations.",
+    "language": "en",
+    "ground_truth": { "document_id": "DOC-019", "chapter": "Section 1: stack" }
+  },
+  {
+    "id": "eval-017",
+    "question": "How is knowledge represented in artificial intelligence?",
+    "language": "en",
+    "ground_truth": { "document_id": "DOC-025", "chapter": "Section 2: knowledge representation" }
+  },
+  {
+    "id": "eval-018",
+    "question": "Explain multithreading and how it works in Java.",
+    "language": "en",
+    "ground_truth": { "document_id": "DOC-027", "chapter": "Section 1: multithreading" }
+  },
+  {
+    "id": "eval-019",
+    "question": "What are the main characteristics of big data?",
+    "language": "en",
+    "ground_truth": { "document_id": "DOC-035", "chapter": "Section 3: big data" }
+  },
+  {
+    "id": "eval-020",
+    "question": "What role does training data play in machine learning?",
+    "language": "en",
+    "ground_truth": { "document_id": "DOC-037", "chapter": "Section 1: training data" }
+  }
+]

@@ -24,4 +24,4 @@ pythonpath = ["."]
 [tool.mypy]
 python_version = "3.14"
 strict = true
-files = ["app.py", "generate_data.py", "rag_core", "tests"]
+files = ["app.py", "generate_data.py", "eval.py", "rag_core", "tests"]

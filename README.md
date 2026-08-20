@@ -155,3 +155,24 @@ uv run python -m demo_naive_rag "giải thích bảng băm là gì?"
 ```
 
 Prints the ingested unit count, the single-batched embedding step, the fused retrieval ranking, and a generated answer with its citations.
+
+## Evaluation
+
+`eval.py` computes the report numbers over a hand-made bilingual set of 20 question/ground-truth pairs (`eval_set.json`, 10 Vietnamese + 10 English, each pointing at the document + chapter the answer must come from). It measures, per question and in aggregate:
+
+- **Retrieval hit@5** — was the ground-truth Source among the top-5 Sources retrieved, on the naive path (RRF top-5) and on the full path (re-rank + dedupe)?
+- **Citation precision** — of the Citations the generated answer returned, how many point at the ground-truth Source? Answers the pipeline refused carry no Citations and are excluded from the precision mean (reported separately as refusals), so policy-correct refusals never penalize precision.
+
+The summary table shows naive vs. full side by side — the regression check that the quality layers (re-ranking, CRAG judge, answer check) help.
+
+```sh
+uv run python -m eval                      # full eval: retrieval + LLM generation
+uv run python -m eval --retrieval-only     # hit@5 only, no LLM calls
+```
+
+Options:
+
+- `--eval-set PATH` — path to the eval set (default `./eval_set.json`).
+- `--retrieval-only` — skip generation and report only retrieval hit@5.
+
+The eval set targets the seeded dataset: regenerate the data with `uv run python -m generate_data --seed 42` so the ground-truth document/chapter references stay valid (the test suite asserts this).
