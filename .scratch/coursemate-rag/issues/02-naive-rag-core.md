@@ -4,10 +4,14 @@
 
 **Blocked by:** 01 (synthetic data generator)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Ingesting the synthetic data produces chunks whose metadata points to document + chapter
-- [ ] All chunks are embedded in a single batched request (no per-chunk calls)
-- [ ] Retrieval returns top-20 dense and top-20 BM25 results fused by RRF at k=60
-- [ ] `answer()` returns a useful answer to a knowledge question grounded in the synthetic documents, with its Sources attached
-- [ ] The query text is embedded once per call and retrieved against the FAISS index built at startup
+- [x] Ingesting the synthetic data produces chunks whose metadata points to document + chapter
+- [x] All chunks are embedded in a single batched request (no per-chunk calls)
+- [x] Retrieval returns top-20 dense and top-20 BM25 results fused by RRF at k=60
+- [x] `answer()` returns a useful answer to a knowledge question grounded in the synthetic documents, with its Sources attached
+- [x] The query text is embedded once per call and retrieved against the FAISS index built at startup
+
+## Comments
+
+- 2026-08-20: Implemented in commits `b1a642e` and `319cde2`. `rag_core/` package with `RagCore.answer()` as the only public entry point, `build_rag_core()` factory, config via `.env`, `demo_naive_rag.py` per-layer demo. 30 tests pass, mypy strict clean. Code review findings (single-seam testing, 400–600 token chunks exercised by real data, demo double-embed, dead code) all addressed in the follow-up commit.
