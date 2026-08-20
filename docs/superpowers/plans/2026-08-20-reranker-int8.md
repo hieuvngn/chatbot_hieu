@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Quantize the local `BAAI/bge-reranker-v2-m3` reranker to INT8 (bitsandbytes `load_in_8bit`) so GPU memory drops from ~2.27 GB (FP32) to ~570 MB, with an FP32 fallback on CPU-only machines.
+**Goal:** Quantize the local `BAAI/bge-reranker-v2-m3` reranker to INT8 (bitsandbytes `load_in_8bit`) so GPU memory drops from ~2.17 GB (FP32) to ~0.8 GB, while keeping the classifier (scoring) head in FP32 so scores still discriminate, with an FP32 fallback on CPU-only machines.
 
-**Architecture:** `LocalBgeReranker.__init__` loads the model via `AutoModelForSequenceClassification.from_pretrained(..., quantization_config=BitsAndBytesConfig(load_in_8bit=True), device_map="auto")` when CUDA is available; otherwise falls back to the existing FP32 load. The `rerank()` interface is unchanged.
+**Architecture:** `LocalBgeReranker.__init__` loads the model via `AutoModelForSequenceClassification.from_pretrained(..., quantization_config=BitsAndBytesConfig(load_in_8bit=True, llm_int8_skip_modules=["classifier"]), device_map="auto")` when CUDA is available; otherwise falls back to the existing FP32 load. The `rerank()` interface is unchanged.
 
 **Tech Stack:** Python 3.11+, torch 2.13.0+cu130, transformers 4.57.6, bitsandbytes, accelerate, pytest.
 
