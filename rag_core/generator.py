@@ -3,9 +3,8 @@ from __future__ import annotations
 import re
 from typing import Protocol
 
-from rag_core.models import Citation, Source
-
-DEFAULT_LLM_MODEL = "gpt-4o-mini"
+from rag_core.config import DEFAULT_BASE_URL, DEFAULT_LLM_MODEL
+from rag_core.models import Chunk, Citation, Source
 
 _SYSTEM_PROMPT = (
     "You are CourseMate, a helpful study assistant for IT students. "
@@ -20,7 +19,7 @@ _CITATION_PATTERN = re.compile(r"\[(\d+)\]")
 
 
 class Generator(Protocol):
-    def generate(self, question: str, sources: list[tuple[Source, str]]) -> str: ...
+    def generate(self, question: str, chunks: list[Chunk]) -> str: ...
 
 
 class OpenRouterGenerator:
@@ -28,17 +27,17 @@ class OpenRouterGenerator:
         self,
         api_key: str,
         model: str = DEFAULT_LLM_MODEL,
-        base_url: str = "https://openrouter.ai/api/v1",
+        base_url: str = DEFAULT_BASE_URL,
     ) -> None:
         from openai import OpenAI
 
         self._client = OpenAI(api_key=api_key, base_url=base_url)
         self._model = model
 
-    def generate(self, question: str, sources: list[tuple[Source, str]]) -> str:
+    def generate(self, question: str, chunks: list[Chunk]) -> str:
         numbered = "\n\n".join(
-            f"[{i}] ({s.document_title}, {s.chapter}):\n{text}"
-            for i, (s, text) in enumerate(sources, start=1)
+            f"[{i}] ({chunk.source.document_title}, {chunk.source.chapter}):\n{chunk.text}"
+            for i, chunk in enumerate(chunks, start=1)
         )
         user_prompt = (
             f"Sources:\n{numbered}\n\n"

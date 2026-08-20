@@ -5,7 +5,7 @@ from typing import Protocol
 import numpy as np
 
 from rag_core.embeddings import Embedder
-from rag_core.models import Chunk, Source
+from rag_core.models import Chunk
 
 DENSE_TOP_K = 20
 BM25_TOP_K = 20
@@ -32,7 +32,6 @@ class Index:
 
     def __init__(self, chunks: list[Chunk], embedder: Embedder) -> None:
         self.chunks = chunks
-        self._embedder = embedder
         self._dense = self._build_dense(chunks, embedder)
         self._lexical = self._build_lexical(chunks)
 
@@ -76,27 +75,28 @@ class Index:
                 scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (RRF_K + rank)
         return sorted(scores, key=lambda i: scores[i], reverse=True)
 
-    def retrieve(self, query_text: str, query_vector: np.ndarray) -> list[tuple[Source, str]]:
-        """Fuse dense top-20 and BM25 top-20 via RRF, dedupe to top-5 Sources."""
+    def _rank(self, query_text: str, query_vector: np.ndarray) -> list[int]:
         dense_rank = self._dense_ranking(query_vector)
         lexical_rank = self._lexical_ranking(query_text)
-        fused = self._rrf_fusion([dense_rank, lexical_rank])
+        return self._rrf_fusion([dense_rank, lexical_rank])
+
+    def retrieve(self, query_text: str, query_vector: np.ndarray) -> list[Chunk]:
+        """Fuse dense top-20 and BM25 top-20 via RRF, dedupe to top-5 Sources."""
+        fused = self._rank(query_text, query_vector)
 
         seen: set[tuple[str, str]] = set()
-        sources: list[tuple[Source, str]] = []
+        sources: list[Chunk] = []
         for chunk_id in fused:
             chunk = self.chunks[chunk_id]
             key = (chunk.source.document_id, chunk.source.chapter)
             if key in seen:
                 continue
             seen.add(key)
-            sources.append((chunk.source, chunk.text))
+            sources.append(chunk)
             if len(sources) >= FINAL_TOP_K:
                 break
         return sources
 
     def fused_ranking(self, query_text: str, query_vector: np.ndarray) -> list[int]:
         """Return the fused chunk ranking (dense + BM25 via RRF) for demos and eval."""
-        dense_rank = self._dense_ranking(query_vector)
-        lexical_rank = self._lexical_ranking(query_text)
-        return self._rrf_fusion([dense_rank, lexical_rank])
+        return self._rank(query_text, query_vector)

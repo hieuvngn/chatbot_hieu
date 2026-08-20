@@ -16,8 +16,6 @@ import argparse
 import json
 import sys
 
-import numpy as np
-
 from rag_core import RagCore, Session
 from rag_core.chunking import chunk_dataset
 from rag_core.config import load_config
@@ -41,7 +39,7 @@ def main(argv: list[str] | None = None) -> None:
     courses = json.loads((config.data_dir / "courses.json").read_text(encoding="utf-8"))
     documents = json.loads((config.data_dir / "documents.json").read_text(encoding="utf-8"))
     chunks = chunk_dataset(list(courses), list(documents))
-    print(f"  {len(courses)} courses, {len(documents)} documents, {len(chunks)} chunks")
+    print(f"  {len(courses)} courses, {len(documents)} documents, {len(chunks)} index units")
 
     print("\n== Embedding ==")
     embedder = OpenRouterEmbedder(
@@ -55,12 +53,6 @@ def main(argv: list[str] | None = None) -> None:
 
     print("\n== Retrieval (hybrid: BM25 top-20 + dense top-20, RRF k=60) ==")
     query = args.question
-    query_vector = np.asarray(embedder.embed_query(query), dtype=np.float32)
-
-    fused = index.fused_ranking(query, query_vector)
-
-    print(f"  query: {query}")
-    print("  fused top-5 :", [index.chunks[i].source.document_id for i in fused[:5]])
 
     print("\n== Generation ==")
     core = RagCore(
@@ -73,8 +65,10 @@ def main(argv: list[str] | None = None) -> None:
         ),
         index=index,
     )
+    print(f"  query: {query}")
     result = core.answer(query, Session(id="demo", user_id="demo", turns=[]))
 
+    print("  fused top-5 :", [s.document_id for s in result.sources])
     print(f"  answer: {result.answer}")
     print("  sources:")
     for i, source in enumerate(result.sources, start=1):

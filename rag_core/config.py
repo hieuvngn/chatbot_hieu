@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-from rag_core.embeddings import DEFAULT_EMBED_DIM, DEFAULT_EMBED_MODEL
-from rag_core.generator import DEFAULT_LLM_MODEL
-
 DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_LLM_MODEL = "gpt-4o-mini"
+DEFAULT_EMBED_MODEL = "nvidia/nemotron-3-embed-1b:free"
+DEFAULT_EMBED_DIM = 2048
 
 
 @dataclass(frozen=True)
@@ -17,8 +18,7 @@ class Config:
     llm_model: str = DEFAULT_LLM_MODEL
     embed_model: str = DEFAULT_EMBED_MODEL
     embed_dim: int = DEFAULT_EMBED_DIM
-    base_url: str = "https://openrouter.ai/api/v1"
-    env_files: tuple[Path, ...] = field(default_factory=tuple)
+    base_url: str = DEFAULT_BASE_URL
 
 
 def load_config(
@@ -27,7 +27,6 @@ def load_config(
     data_dir: str | Path | None = None,
 ) -> Config:
     """Read configuration from the environment, optionally loading a .env file."""
-    env_files: tuple[Path, ...] = ()
     if env_file:
         path = Path(env_file)
         if path.exists():
@@ -35,7 +34,6 @@ def load_config(
                 from dotenv import load_dotenv
 
                 load_dotenv(path)
-                env_files = (path,)
             except ImportError:
                 pass
 
@@ -53,6 +51,5 @@ def load_config(
         llm_model=os.environ.get("RAG_LLM_MODEL", DEFAULT_LLM_MODEL),
         embed_model=os.environ.get("RAG_EMBED_MODEL", DEFAULT_EMBED_MODEL),
         embed_dim=int(os.environ.get("RAG_EMBED_DIM", str(DEFAULT_EMBED_DIM))),
-        base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-        env_files=env_files,
+        base_url=os.environ.get("OPENROUTER_BASE_URL", DEFAULT_BASE_URL),
     )

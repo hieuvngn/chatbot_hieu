@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TypedDict
 
 from rag_core.models import Chunk, Source
 
-MIN_TOKENS = 400
 MAX_TOKENS = 600
 OVERLAP = 0.15
 
@@ -59,15 +59,7 @@ def chunk_document(document: DocumentDict, source: Source) -> list[Chunk]:
     """Chunk one document's chapters; each chunk carries document + chapter metadata."""
     chunks: list[Chunk] = []
     for chapter in document["chapters"]:
-        chapter_source = Source(
-            document_id=source.document_id,
-            document_title=source.document_title,
-            chapter=chapter["title"],
-            course_code=source.course_code,
-            kind=source.kind,
-            language=source.language,
-        )
-        chunks.extend(_chunk_text(chapter["content"], chapter_source))
+        chunks.extend(_chunk_text(chapter["content"], replace(source, chapter=chapter["title"])))
     return chunks
 
 

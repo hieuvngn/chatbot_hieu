@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-DEFAULT_EMBED_MODEL = "nvidia/nemotron-3-embed-1b:free"
-DEFAULT_EMBED_DIM = 2048
-
+from rag_core.config import DEFAULT_BASE_URL, DEFAULT_EMBED_DIM, DEFAULT_EMBED_MODEL
 
 class Embedder(Protocol):
     def embed_batch(self, texts: list[str]) -> list[list[float]]: ...
@@ -24,7 +22,7 @@ class OpenRouterEmbedder:
         api_key: str,
         model: str = DEFAULT_EMBED_MODEL,
         dim: int = DEFAULT_EMBED_DIM,
-        base_url: str = "https://openrouter.ai/api/v1",
+        base_url: str = DEFAULT_BASE_URL,
     ) -> None:
         from openai import OpenAI
 

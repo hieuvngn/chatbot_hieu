@@ -6,7 +6,7 @@ from pathlib import Path
 
 import generate_data as gd
 from rag_core import RagCore, Session
-from rag_core.models import Source
+from rag_core.models import Chunk, Source
 
 SEED = 42
 DIM = 64
@@ -74,11 +74,11 @@ class FakeGenerator:
     def __init__(self) -> None:
         self.calls: list[tuple[str, list[Source]]] = []
 
-    def generate(self, question: str, sources: list[tuple[Source, str]]) -> str:
-        self.calls.append((question, [s for s, _ in sources]))
-        source, text = sources[0]
-        first_sentence = text.split(".")[0]
-        return f"Trả lời về {source.document_title}: {first_sentence}. [1]"
+    def generate(self, question: str, chunks: list[Chunk]) -> str:
+        sources = [chunk.source for chunk in chunks]
+        self.calls.append((question, sources))
+        first_sentence = chunks[0].text.split(".")[0]
+        return f"Trả lời về {sources[0].document_title}: {first_sentence}. [1]"
 
 
 def _content_tokens(text: str) -> list[str]:
@@ -191,6 +191,17 @@ def test_citations_reference_returned_sources(tmp_path: Path) -> None:
         assert (c.source.document_id, c.source.chapter) in source_ids
 
 
+def test_hybrid_ranking_favors_lexical_matches(tmp_path: Path) -> None:
+    core, ds = make_core(tmp_path)
+    doc, chapter, topic = ground_truth(ds, "CS112")
+    query = f"giải thích {topic}" if doc.language == "vi" else f"explain {topic}"
+
+    result = core.answer(query, session())
+
+    assert result.sources[0].document_id == doc.id
+    assert result.sources[0].chapter == chapter.title
+
+
 def test_generator_receives_top_five_ordered_sources(tmp_path: Path) -> None:
     generator = FakeGenerator()
     core, _ = make_core(tmp_path, generator=generator)
@@ -202,13 +213,16 @@ def test_generator_receives_top_five_ordered_sources(tmp_path: Path) -> None:
     assert len(sources) == len(set((s.document_id, s.chapter) for s in sources))
 
 
-def test_fused_ranking_combines_dense_and_bm25(tmp_path: Path) -> None:
-    import numpy as np
+def test_single_chunk_per_chapter_maps_metadata(tmp_path: Path) -> None:
+    core, ds = make_core(tmp_path)
+    doc = next(d for d in ds.documents if d.language == "vi")
+    chapter = next(ch for ch in doc.chapters if ch.title not in INTRO_TITLES)
+    topic = chapter.title.split(": ", 1)[1]
 
-    core, _ = make_core(tmp_path)
-    query = "giải thích bảng băm là gì?"
-    query_vector = np.asarray(core._embedder.embed_query(query), dtype=np.float32)
-    fused = core._index.fused_ranking(query, query_vector)
-    assert len(fused) > 0
-    top = core._index.chunks[fused[0]].source
-    assert top.document_id != ""
+    result = core.answer(f"giải thích {topic}", session())
+
+    assert result.sources[0].document_id == doc.id
+    assert result.sources[0].chapter == chapter.title
+    assert result.sources[0].course_code == doc.course_code
+    assert result.sources[0].kind == doc.kind
+    assert result.sources[0].language == doc.language

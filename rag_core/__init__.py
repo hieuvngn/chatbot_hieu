@@ -42,7 +42,7 @@ class RagCore:
         query_vector = np.asarray(self._embedder.embed_query(user_message), dtype=np.float32)
         retrieved = self._index.retrieve(user_message, query_vector)
 
-        sources = [source for source, _ in retrieved]
+        sources = [chunk.source for chunk in retrieved]
         answer_text = self._generator.generate(user_message, retrieved)
         citations = parse_citations(answer_text, sources)
         return AnswerResult(answer=answer_text, citations=citations, sources=sources)

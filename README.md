@@ -80,7 +80,7 @@ for citation in result.citations:
     print(citation.marker, citation.source.document_id, citation.source.chapter)
 ```
 
-`AnswerResult` carries the answer text, its `Citations` (the `[n]` markers in the answer mapped back to their Sources), and the ordered top-5 `Sources` used. All index chunks are embedded in a single batched request at build time; queries are embedded one per call.
+`AnswerResult` carries the answer text, its `Citations` (the `[n]` markers in the answer mapped back to their Sources), and the ordered top-5 `Sources` used. All index units are embedded in a single batched request at build time; queries are embedded one per call.
 
 ### Demo script
 
@@ -88,4 +88,4 @@ for citation in result.citations:
 uv run python -m demo_naive_rag "giải thích bảng băm là gì?"
 ```
 
-Prints the chunk count, the single-batched embedding step, the fused retrieval ranking, and a generated answer with its citations.
+Prints the ingested unit count, the single-batched embedding step, the fused retrieval ranking, and a generated answer with its citations.
