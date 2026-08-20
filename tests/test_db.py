@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from rag_core.db import Database
-from rag_core.models import Turn
+from rag_core.models import Citation, Source, Turn
 
 
 def make_db(tmp_path: Path) -> Database:
@@ -95,3 +96,120 @@ def test_get_session_unknown_id_raises(tmp_path: Path) -> None:
     db = make_db(tmp_path)
     with pytest.raises(KeyError):
         db.get_session("nope")
+
+
+def make_citation(marker: str) -> Citation:
+    return Citation(
+        marker=marker,
+        source=Source(
+            document_id="DOC-001",
+            document_title="Bảng băm",
+            chapter="Chương 1",
+            course_code="CS101",
+            kind="textbook",
+            language="vi",
+        ),
+    )
+
+
+def test_citations_persist_with_exchange(tmp_path: Path) -> None:
+    db = make_db(tmp_path)
+    user = db.register("hieu", "pw")
+    session = db.get_or_create_session(user.id)
+    db.append_exchange(
+        session.id,
+        "giải thích bảng băm",
+        "Bảng băm là một cấu trúc dữ liệu [1].",
+        citations=[make_citation("1"), make_citation("2")],
+    )
+    resumed = db.get_session(session.id)
+    assistant = resumed.turns[1]
+    assert [c.marker for c in assistant.citations] == ["1", "2"]
+    assert assistant.citations[0].source.document_id == "DOC-001"
+    assert assistant.citations[0].source.chapter == "Chương 1"
+
+
+def test_refusal_persists_with_exchange(tmp_path: Path) -> None:
+    db = make_db(tmp_path)
+    user = db.register("hieu", "pw")
+    session = db.get_or_create_session(user.id)
+    db.append_exchange(
+        session.id,
+        "hỏi gì đó",
+        "",
+        refused=True,
+        rephrase_suggestion="Hãy thử hỏi lại với từ khóa cụ thể hơn.",
+    )
+    resumed = db.get_session(session.id)
+    assistant = resumed.turns[1]
+    assert assistant.refused is True
+    assert assistant.rephrase_suggestion == "Hãy thử hỏi lại với từ khóa cụ thể hơn."
+    assert assistant.citations == []
+
+
+def test_exchange_without_metadata_restores_plain_turn(tmp_path: Path) -> None:
+    db = make_db(tmp_path)
+    user = db.register("hieu", "pw")
+    session = db.get_or_create_session(user.id)
+    db.append_exchange(session.id, "hello", "world")
+    resumed = db.get_session(session.id)
+    assistant = resumed.turns[1]
+    assert assistant.refused is False
+    assert assistant.rephrase_suggestion == ""
+    assert assistant.citations == []
+
+
+def test_old_schema_database_migrates_in_place(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE conversations (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER UNIQUE NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL REFERENCES conversations(id),
+            role TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO users (id, username, password, created_at) VALUES (1, 'hieu', 'pw', 'now')"
+    )
+    conn.execute(
+        "INSERT INTO conversations (id, user_id, created_at) VALUES ('c1', 1, 'now')"
+    )
+    conn.execute(
+        "INSERT INTO messages (conversation_id, role, text, created_at) "
+        "VALUES ('c1', 'user', 'hello', 'now')"
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(path)
+    session = db.get_session("c1")
+    assert [t.text for t in session.turns] == ["hello"]
+    db.append_exchange(
+        session.id,
+        "follow-up",
+        "reply [1]",
+        citations=[make_citation("1")],
+        refused=True,
+        rephrase_suggestion="Try again.",
+    )
+    resumed = db.get_session(session.id)
+    assert len(resumed.turns) == 3
+    assert resumed.turns[2].citations[0].marker == "1"
+    assert resumed.turns[2].refused is True
+    assert resumed.turns[2].rephrase_suggestion == "Try again."

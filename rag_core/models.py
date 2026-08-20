@@ -46,6 +46,9 @@ class User:
 class Turn:
     role: str
     text: str
+    citations: list[Citation] = field(default_factory=list)
+    refused: bool = False
+    rephrase_suggestion: str = ""
 
 
 @dataclass

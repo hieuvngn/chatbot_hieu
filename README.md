@@ -136,6 +136,18 @@ uv run python -m demo_memory "còn ví dụ về nó?"
 
 Registers/logs in a demo user against SQLite, asks a first question (passed through unchanged), then a follow-up whose rewritten query is printed before it enters retrieval, and shows the session history surviving a database reopen.
 
+## Streamlit UI
+
+The user-facing app: login and register screens gate access to the chat; chat messages flow through `answer()` with the logged-in user's Session; every answer renders its Citations as clickable expanders showing document + chapter; refusals render distinctly with their rephrase suggestion. History — including Citations and refusals — is stored in SQLite and restored on the next login.
+
+### Running
+
+```sh
+uv run streamlit run app.py
+```
+
+Requires `OPENROUTER_API_KEY` in `.env` and the local-GPU dependencies (torch, transformers) for the re-ranker. The app database (`data/app.db`) is created on first run.
+
 ## Naive RAG core demo
 
 ```sh
