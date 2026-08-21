@@ -12,7 +12,9 @@ _CLASSIFIER_SYSTEM = (
     "KNOWLEDGE_QA (asks to explain a topic, concept, algorithm, theory grounded in documents), "
     "OTHER (smalltalk, weather, unrelated). Reply ONLY JSON {\"intent\":\"...\"}. "
     "Examples: 'AI có prerequisite gì?'->COURSE_ADVISOR, 'Tôi còn thiếu gì để học AI?'->COURSE_ADVISOR, "
-    "'Tôi nên học môn nào tiếp theo?'->COURSE_ADVISOR, 'Giải thích bảng băm'->KNOWLEDGE_QA, 'Thời tiết?'->OTHER"
+    "'Tôi nên học môn nào tiếp theo?'->COURSE_ADVISOR, 'Giải thích bảng băm'->KNOWLEDGE_QA, "
+    "'Tài liệu này nói về gì?'->KNOWLEDGE_QA, 'Tóm tắt file mình đính kèm'->KNOWLEDGE_QA, "
+    "'Thời tiết?'->OTHER"
 )
 
 _EXTRACTOR_SYSTEM = (

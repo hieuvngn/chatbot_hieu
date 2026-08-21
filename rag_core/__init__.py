@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -11,12 +12,15 @@ from rag_core.answer_check import (
     CheckVerdict,
     OpenRouterAnswerChecker,
 )
+from rag_core.attachments import AttachmentStore
 from rag_core.chunking import CourseDict, DocumentDict, chunk_dataset
 from rag_core.config import Config, load_config
 from rag_core.course_advisor import CourseAdvisor
+from rag_core.db import APP_DB_FILENAME
 from rag_core.embeddings import Embedder, OpenRouterEmbedder
 from rag_core.generator import Generator, OpenRouterGenerator, parse_citations
-from rag_core.index import Index
+from rag_core.index import FINAL_TOP_K, Index, dedupe_by_source
+from rag_core.index import rrf_merge as rrf_merge_items
 from rag_core.intent import (
     CourseExtractor,
     Extraction,
@@ -59,6 +63,7 @@ class RagCore:
         advisor: CourseAdvisor | None = None,
         allow_medium: bool = False,
         enable_fallback: bool = False,
+        attachment_store: AttachmentStore | None = None,
     ) -> None:
         self._embedder = embedder
         self._generator = generator
@@ -77,6 +82,13 @@ class RagCore:
         self._allow_medium = allow_medium
         self._enable_fallback = enable_fallback
         self._index = index or self._build_index(data_dir, embedder)
+        self._attachments = attachment_store
+        self._attachment_cache: dict[str, tuple[tuple[str, ...], Index]] = {}
+
+    @property
+    def embedder(self) -> Embedder:
+        """The shared embedder; the UI's AttachmentStore reuses this instance."""
+        return self._embedder
 
     @staticmethod
     def _build_index(data_dir: Path, embedder: Embedder) -> Index:
@@ -85,9 +97,47 @@ class RagCore:
         chunks = chunk_dataset(list(courses), list(documents))
         return Index(chunks, embedder)
 
-    def _retrieve_sources(self, query_text: str, query_vector: np.ndarray) -> list[Chunk]:
-        """Retrieve the chunks behind the answer via hybrid RRF retrieval."""
-        return self._index.retrieve(query_text, query_vector)
+    def _retrieve_sources(
+        self, query_text: str, query_vector: np.ndarray, session_id: str | None = None
+    ) -> list[Chunk]:
+        """Hybrid retrieval over course KB fused with this session's attachments."""
+        kb_ranked = [
+            self._index.chunks[i]
+            for i in self._index.fused_ranking(query_text, query_vector)
+        ]
+        if session_id is not None:
+            att_ranked = self._attachment_ranking(query_text, query_vector, session_id)
+            if att_ranked:
+                kb_ranked = rrf_merge_items([kb_ranked, att_ranked])
+        return dedupe_by_source(kb_ranked, FINAL_TOP_K)
+
+    def _attachment_ranking(
+        self, query_text: str, query_vector: np.ndarray, session_id: str
+    ) -> list[Chunk]:
+        if self._attachments is None:
+            return []
+        try:
+            identity = self._attachments.identity(session_id)
+            if not identity:
+                return []
+            cached = self._attachment_cache.get(session_id)
+            if cached is not None and cached[0] == identity:
+                att_index = cached[1]
+            else:
+                chunks = self._attachments.load_chunks(session_id)
+                vectors = self._attachments.load_vectors(session_id)
+                att_index = Index(chunks, self._embedder, vectors=vectors)
+                self._attachment_cache[session_id] = (identity, att_index)
+            return [
+                att_index.chunks[i]
+                for i in att_index.fused_ranking(query_text, query_vector)
+            ]
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "attachment retrieval failed; falling back to course KB only",
+                exc_info=True,
+            )
+            return []
 
     def answer(self, user_message: str, session: Session) -> AnswerResult:
         query = self._rewrite_for_session(user_message, session)
@@ -98,10 +148,10 @@ class RagCore:
             if intent == "OTHER":
                 return self._other_result(query)
         query_vector = np.asarray(self._embedder.embed_query(query), dtype=np.float32)
-        retrieved = self._retrieve_sources(query, query_vector)
+        retrieved = self._retrieve_sources(query, query_vector, session.id)
 
         if self._judge is not None and self._rewriter is not None:
-            return self._gated_answer(query, retrieved, self._judge, self._rewriter)
+            return self._gated_answer(query, retrieved, self._judge, self._rewriter, session.id)
         return self._generate_result(query, retrieved)
 
     def _rewrite_for_session(self, message: str, session: Session) -> str:
@@ -252,6 +302,7 @@ class RagCore:
         chunks: list[Chunk],
         judge: Judge,
         rewriter: QueryRewriter,
+        session_id: str | None = None,
     ) -> AnswerResult:
         judgment = judge.assess(question, chunks)
         if judgment.is_high:
@@ -261,7 +312,7 @@ class RagCore:
         refined_vector = np.asarray(
             self._embedder.embed_query(refined), dtype=np.float32
         )
-        refined_chunks = self._retrieve_sources(refined, refined_vector)
+        refined_chunks = self._retrieve_sources(refined, refined_vector, session_id)
         judgment = judge.assess(refined, refined_chunks)
         if self._is_acceptable(judgment):
             return self._generate_result(refined, refined_chunks)
@@ -368,6 +419,7 @@ def build_rag_core(config: Config | None = None) -> RagCore:
         model=config.llm_model,
         base_url=config.base_url,
     )
+    attachment_store = AttachmentStore(config.data_dir / APP_DB_FILENAME, embedder)
     return RagCore(
         config.data_dir,
         embedder,
@@ -381,6 +433,7 @@ def build_rag_core(config: Config | None = None) -> RagCore:
         advisor=advisor,
         allow_medium=config.allow_medium,
         enable_fallback=config.enable_fallback,
+        attachment_store=attachment_store,
     )
 
 
@@ -391,6 +444,7 @@ __all__ = [
     "AnswerResult",
     "Session",
     "Chunk",
+    "AttachmentStore",
     "Judge",
     "OpenRouterJudge",
     "QueryRewriter",

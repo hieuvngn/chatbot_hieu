@@ -4,8 +4,12 @@ import hashlib
 import math
 from pathlib import Path
 
+import pytest
+
 import generate_data as gd
 from rag_core import RagCore, Session
+from rag_core.attachments import AttachmentStore
+from rag_core.db import Database
 from rag_core.answer_check import CheckVerdict, DEFAULT_UNSUPPORTED_FEEDBACK
 from rag_core.judge import Judgment, Level
 from rag_core.models import Chunk, Source, Turn
@@ -620,3 +624,101 @@ def test_rewriter_receives_only_last_six_turns(tmp_path: Path) -> None:
     _, turns = rewriter.calls[0]
     assert len(turns) == 6, "the rewrite must use only the last 6 turns"
     assert [t.text for t in turns] == [f"turn {i}" for i in range(2, 8)]
+
+
+def make_core_with_attachment(
+    tmp_path: Path,
+) -> tuple[RagCore, gd.Dataset, AttachmentStore]:
+    ds = gd.generate(seed=SEED)
+    gd.write(ds, tmp_path)
+    embedder = RecordingEmbedder()
+    db_path = tmp_path / "test.db"
+    Database(db_path)
+    store = AttachmentStore(db_path, embedder)
+    core = RagCore(
+        data_dir=tmp_path,
+        embedder=embedder,
+        generator=FakeGenerator(),
+        judge=FakeJudge(levels=["high"]),
+        session_rewriter=None,
+        attachment_store=store,
+    )
+    return core, ds, store
+
+
+UPLOAD_TOKENS = "zzqwub florpquux xylophane"
+
+
+def test_answer_cites_uploaded_attachment(tmp_path: Path) -> None:
+    core, _, store = make_core_with_attachment(tmp_path)
+    store.add("sess-upload", "ghichep.txt", UPLOAD_TOKENS.encode())
+
+    result = core.answer(
+        f"giải thích {UPLOAD_TOKENS}", Session(id="sess-upload", user_id="u1")
+    )
+
+    assert result.sources, "expected at least one source"
+    assert any(s.kind == "upload" for s in result.sources)
+
+
+def test_attachment_source_has_position_chapter(tmp_path: Path) -> None:
+    core, _, store = make_core_with_attachment(tmp_path)
+    store.add("sess-upload", "ghichep.txt", UPLOAD_TOKENS.encode())
+
+    result = core.answer(UPLOAD_TOKENS, Session(id="sess-upload", user_id="u1"))
+
+    upload_sources = [s for s in result.sources if s.kind == "upload"]
+    assert all(s.chapter == "Nội dung" for s in upload_sources)
+    assert all(s.document_id.startswith("upload_") for s in upload_sources)
+
+
+def test_kb_only_when_no_attachments(tmp_path: Path) -> None:
+    core, ds, _ = make_core_with_attachment(tmp_path)
+    doc, chapter, topic = ground_truth(ds, "CS112")
+    query = f"giải thích {topic}" if doc.language == "vi" else f"explain {topic}"
+
+    result = core.answer(query, session())
+
+    assert result.sources
+    assert any(s.kind != "upload" for s in result.sources)
+
+
+def test_attachment_error_degrades_to_kb_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core, ds, store = make_core_with_attachment(tmp_path)
+    doc, chapter, topic = ground_truth(ds, "CS112")
+
+    def boom(conversation_id: str) -> tuple[str, ...]:
+        raise RuntimeError("db gone")
+
+    monkeypatch.setattr(store, "identity", boom)
+    query = f"giải thích {topic}" if doc.language == "vi" else f"explain {topic}"
+
+    result = core.answer(query, session())
+
+    assert result.sources
+    assert all(s.kind != "upload" for s in result.sources)
+
+
+def test_refine_pass_also_searches_attachments(tmp_path: Path) -> None:
+    # Judge chấm low lần 1 → Refine viết lại → high lần 2; refined retrieval vẫn thấy attachment.
+    ds = gd.generate(seed=SEED)
+    gd.write(ds, tmp_path)
+    embedder = RecordingEmbedder()
+    Database(tmp_path / "test.db")
+    store = AttachmentStore(tmp_path / "test.db", embedder)
+    store.add("sess-upload", "ghichep.txt", UPLOAD_TOKENS.encode())
+    core = RagCore(
+        data_dir=tmp_path,
+        embedder=embedder,
+        generator=FakeGenerator(),
+        judge=FakeJudge(levels=["low", "high"]),
+        rewriter=FakeRewriter(rewritten=UPLOAD_TOKENS),
+        session_rewriter=None,
+        attachment_store=store,
+    )
+
+    result = core.answer("câu hỏi mơ hồ", Session(id="sess-upload", user_id="u1"))
+
+    assert any(s.kind == "upload" for s in result.sources)
