@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import uuid
@@ -10,7 +11,7 @@ from rag_core.models import MAX_TURNS, Citation, ConversationMeta, Session, Sour
 
 
 class Database:
-    """SQLite persistence for users, one conversation per user, and messages.
+    """SQLite persistence for users, conversations (N per user), and messages.
 
     Passwords are stored in plaintext by explicit demo choice — this is a
     demo database, not a security boundary.
@@ -30,7 +31,7 @@ class Database:
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
+        with contextlib.closing(self._connect()) as conn:
             self._create_schema(conn)
             self._migrate(conn)
         # Deprecated handle kept for backwards compat (tests call close(),
@@ -45,6 +46,25 @@ class Database:
         )
         conn.row_factory = sqlite3.Row
         return conn
+
+    @staticmethod
+    def _ensure_conversation_index(conn: sqlite3.Connection) -> None:
+        """Create index on conversations(user_id, updated_at DESC) if possible.
+
+        Silently ignores OperationalError caused by missing column on legacy
+        DBs before migration (e.g. no such column: updated_at); re-raises
+        any other OperationalError so real problems are not hidden.
+        """
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at DESC)"
+            )
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            # Legacy DB before updated_at migration; caller (_migrate) will retry after migration.
+            if "no such column" in msg or "no such table" in msg:
+                return
+            raise
 
     def _create_schema(self, conn: sqlite3.Connection) -> None:
         conn.executescript(
@@ -76,13 +96,7 @@ class Database:
             );
             """
         )
-        # Index for ordering; may fail on legacy DB where updated_at not yet migrated — ignore.
-        try:
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at DESC)"
-            )
-        except sqlite3.OperationalError:
-            pass
+        self._ensure_conversation_index(conn)
         conn.commit()
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
@@ -140,13 +154,7 @@ class Database:
                     CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at DESC);
                     """)
                     break
-        # Ensure index exists after migration (for legacy DB where _create_schema skipped it)
-        try:
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at DESC)"
-            )
-        except sqlite3.OperationalError:
-            pass
+        self._ensure_conversation_index(conn)
         conn.commit()
 
     def close(self) -> None:
@@ -156,7 +164,7 @@ class Database:
             pass
 
     def register(self, username: str, password: str) -> User:
-        with self._connect() as conn:
+        with contextlib.closing(self._connect()) as conn:
             try:
                 cursor = conn.execute(
                     "INSERT INTO users (username, password, display_name, language, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -170,7 +178,7 @@ class Database:
             return User(id=lastrowid, username=username, display_name=username, language="vi")
 
     def login(self, username: str, password: str) -> User | None:
-        with self._connect() as conn:
+        with contextlib.closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT id, username, display_name, language FROM users WHERE username = ? AND password = ?",
                 (username, password),
@@ -185,7 +193,7 @@ class Database:
             )
 
     def get_user(self, user_id: int) -> User | None:
-        with self._connect() as conn:
+        with contextlib.closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT id, username, display_name, language FROM users WHERE id = ?",
                 (user_id,),
@@ -203,7 +211,7 @@ class Database:
         session_id = uuid.uuid4().hex
         now = self._now()
         title = title.strip()[:50] or "New chat"
-        with self._connect() as conn:
+        with contextlib.closing(self._connect()) as conn:
             conn.execute(
                 "INSERT INTO conversations (id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
                 (session_id, user_id, title, now, now),
@@ -212,7 +220,7 @@ class Database:
         return Session(id=session_id, user_id=str(user_id), turns=[])
 
     def list_conversations(self, user_id: int) -> list[ConversationMeta]:
-        with self._connect() as conn:
+        with contextlib.closing(self._connect()) as conn:
             rows = conn.execute(
                 """
                 SELECT c.id, c.user_id, c.title, c.created_at, c.updated_at,
@@ -242,7 +250,7 @@ class Database:
             display_name = display_name.strip()
         if language is not None and language not in ("vi", "en"):
             raise ValueError("language must be 'vi' or 'en'")
-        with self._connect() as conn:
+        with contextlib.closing(self._connect()) as conn:
             if display_name is not None:
                 conn.execute("UPDATE users SET display_name=? WHERE id=?", (display_name, user_id))
             if language is not None:
@@ -256,7 +264,7 @@ class Database:
         title = title.strip()
         if not (1 <= len(title) <= 50):
             raise ValueError("title must be 1..50 chars")
-        with self._connect() as conn:
+        with contextlib.closing(self._connect()) as conn:
             cur = conn.execute(
                 "UPDATE conversations SET title=?, updated_at=? WHERE id=?",
                 (title[:50], self._now(), session_id),
@@ -266,7 +274,7 @@ class Database:
             conn.commit()
 
     def delete_conversation(self, session_id: str) -> None:
-        with self._connect() as conn:
+        with contextlib.closing(self._connect()) as conn:
             conn.execute("DELETE FROM messages WHERE conversation_id=?", (session_id,))
             cur = conn.execute("DELETE FROM conversations WHERE id=?", (session_id,))
             if cur.rowcount == 0:
@@ -274,7 +282,7 @@ class Database:
             conn.commit()
 
     def clear_all_conversations(self, user_id: int) -> None:
-        with self._connect() as conn:
+        with contextlib.closing(self._connect()) as conn:
             conn.execute(
                 "DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)",
                 (user_id,),
@@ -289,7 +297,7 @@ class Database:
         return self.create_conversation(user_id, title="New chat")
 
     def get_session(self, session_id: str) -> Session:
-        with self._connect() as conn:
+        with contextlib.closing(self._connect()) as conn:
             conversation = conn.execute(
                 "SELECT user_id FROM conversations WHERE id = ?", (session_id,)
             ).fetchone()
@@ -334,7 +342,7 @@ class Database:
             if citations
             else None
         )
-        with self._connect() as conn:
+        with contextlib.closing(self._connect()) as conn:
             conn.executemany(
                 "INSERT INTO messages (conversation_id, role, text, created_at, "
                 "citations, refused, rephrase_suggestion) VALUES (?, ?, ?, ?, ?, ?, ?)",
