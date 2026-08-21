@@ -55,12 +55,17 @@ def parse_pdf(data: bytes) -> list[Section]:
     """Extract each non-empty PDF page as Section(chapter='Trang N')."""
     from pypdf import PdfReader
 
-    reader = PdfReader(io.BytesIO(data))
     sections: list[Section] = []
-    for number, page in enumerate(reader.pages, start=1):
-        text = (page.extract_text() or "").strip()
-        if text:
-            sections.append(Section(text, f"Trang {number}"))
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        for number, page in enumerate(reader.pages, start=1):
+            text = (page.extract_text() or "").strip()
+            if text:
+                sections.append(Section(text, f"Trang {number}"))
+    except Exception as exc:
+        raise ValueError(
+            "Không trích xuất được văn bản từ file (PDF scan thiếu text layer?)."
+        ) from exc
     return sections
 
 

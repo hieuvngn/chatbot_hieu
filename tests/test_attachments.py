@@ -103,3 +103,8 @@ def test_invalid_utf8_txt_raises_value_error() -> None:
 def test_scanned_pdf_without_text_raises_value_error() -> None:
     with pytest.raises(ValueError, match="Không trích xuất được"):
         parse_file("scan.pdf", _make_pdf([]))
+
+
+def test_corrupt_pdf_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="Không trích xuất được"):
+        parse_file("broken.pdf", b"%PDF-1.4 this is not really a pdf")
