@@ -188,8 +188,36 @@ def render_sidebar(user: User) -> None:
 
 def render_profile(user: User) -> None:
     st.title("Profile / Setting")
-    st.write(f"Tên hiển thị: {user.display_name}")
-    if st.button("Quay lại chat"):
+    db = get_database()
+    with st.form("profile_form"):
+        display_name = st.text_input("Tên hiển thị", value=user.display_name, max_chars=50)
+        language = st.selectbox("Ngôn ngữ / Language", options=["vi", "en"], index=0 if user.language == "vi" else 1, help="Chọn ngôn ngữ UI và câu trả lời mặc định")
+        submitted = st.form_submit_button("Lưu thay đổi")
+    if submitted:
+        try:
+            updated = db.update_user_profile(user.id, display_name=display_name, language=language)
+            st.session_state["user"] = updated
+            st.success("Đã lưu profile.")
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+    st.divider()
+    st.subheader("Setting")
+    st.caption(f"Username: {user.username} (không đổi)")
+    st.caption(f"Language hiện tại: {user.language}")
+    st.divider()
+    st.subheader("Xóa lịch sử")
+    st.warning("Xóa tất cả conversations và messages của bạn. Không thể khôi phục.")
+    confirm = st.text_input("Gõ DELETE để xác nhận", key="confirm_clear")
+    if st.button("Xóa tất cả lịch sử", type="primary", disabled=confirm != "DELETE"):
+        db.clear_all_conversations(user.id)
+        # tạo 1 chat trống để UI không rỗng
+        new = db.create_conversation(user.id, title="New chat")
+        st.session_state["active_conversation_id"] = new.id
+        st.success("Đã xóa tất cả lịch sử.")
+        st.rerun()
+    st.divider()
+    if st.button("← Quay lại chat"):
         st.session_state["show_profile"] = False
         st.rerun()
 
