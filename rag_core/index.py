@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 import numpy as np
 
 from rag_core.embeddings import Embedder
 from rag_core.models import Chunk
+
+T = TypeVar("T")
 
 DENSE_TOP_K = 20
 BM25_TOP_K = 20
@@ -32,6 +34,30 @@ def dedupe_by_source(chunks: list[Chunk], limit: int) -> list[Chunk]:
     return unique
 
 
+def rrf_merge(rankings: list[list[T]]) -> list[T]:
+    """Fuse rankings of arbitrary items via Reciprocal Rank Fusion (K=60).
+
+    Membership compares items with ``is`` so unhashable mutable dataclasses
+    work. Every input item appears exactly once in the output.
+    """
+    unique: list[T] = []
+
+    def slot(item: T) -> int:
+        for i, candidate in enumerate(unique):
+            if candidate is item:
+                return i
+        unique.append(item)
+        return len(unique) - 1
+
+    scores: dict[int, float] = {}
+    for ranking in rankings:
+        for rank, item in enumerate(ranking, start=1):
+            idx = slot(item)
+            scores[idx] = scores.get(idx, 0.0) + 1.0 / (RRF_K + rank)
+    ordered = sorted(scores, key=lambda i: scores[i], reverse=True)
+    return [unique[i] for i in ordered]
+
+
 class LexicalScorer(Protocol):
     def get_scores(self, query: list[str]) -> list[float]: ...
 
@@ -45,22 +71,39 @@ class DenseIndex(Protocol):
 class Index:
     """Dense (FAISS cosine) + lexical (BM25) hybrid index over chunks."""
 
-    def __init__(self, chunks: list[Chunk], embedder: Embedder) -> None:
+    def __init__(
+        self, chunks: list[Chunk], embedder: Embedder, vectors: np.ndarray | None = None
+    ) -> None:
         self.chunks = chunks
-        self._dense = self._build_dense(chunks, embedder)
+        if vectors is None:
+            raw = np.asarray(
+                embedder.embed_batch([chunk.text for chunk in chunks]), dtype=np.float32
+            )
+        else:
+            if vectors.shape[0] != len(chunks):
+                raise ValueError(
+                    f"vectors rows ({vectors.shape[0]}) must match chunks ({len(chunks)})"
+                )
+            raw = np.asarray(vectors, dtype=np.float32).copy()
+        self._dense = self._dense_from(raw)
         self._lexical = self._build_lexical(chunks)
 
     @staticmethod
-    def _build_dense(chunks: list[Chunk], embedder: Embedder) -> DenseIndex:
+    def _dense_from(matrix: np.ndarray) -> DenseIndex:
         import faiss
 
-        vectors = np.asarray(
-            embedder.embed_batch([chunk.text for chunk in chunks]), dtype=np.float32
-        )
+        vectors = matrix.copy()
         faiss.normalize_L2(vectors)
         index = faiss.IndexFlatIP(vectors.shape[1])
         index.add(vectors)
         return index
+
+    @staticmethod
+    def _build_dense(chunks: list[Chunk], embedder: Embedder) -> DenseIndex:
+        raw = np.asarray(
+            embedder.embed_batch([chunk.text for chunk in chunks]), dtype=np.float32
+        )
+        return Index._dense_from(raw)
 
     @staticmethod
     def _build_lexical(chunks: list[Chunk]) -> LexicalScorer:
@@ -75,7 +118,7 @@ class Index:
         vectors = np.asarray([query_vector], dtype=np.float32)
         faiss.normalize_L2(vectors)
         scores, indices = self._dense.search(vectors, DENSE_TOP_K)
-        return [int(i) for i in indices[0]]
+        return [int(i) for i in indices[0] if i >= 0]
 
     def _lexical_ranking(self, query_text: str) -> list[int]:
         scores = self._lexical.get_scores(_tokenize(query_text))

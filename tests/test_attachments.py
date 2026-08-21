@@ -4,10 +4,13 @@ import hashlib
 import math
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from rag_core.attachments import MAX_FILE_BYTES, AttachmentStore, parse_file
 from rag_core.db import Database
+from rag_core.index import Index, rrf_merge
+from rag_core.models import Chunk, Source
 
 
 def _serialize_pdf(objects: dict[int, str]) -> bytes:
@@ -244,3 +247,47 @@ def test_chunks_isolated_between_conversations(tmp_path: Path) -> None:
     store.add("conv2", "b.txt", "nội dung hai".encode())
     titles1 = [c.source.document_title for c in store.load_chunks("conv1")]
     assert titles1 == ["a.txt"]
+
+
+class ExplodingEmbedder:
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        raise AssertionError("must not re-embed when vectors provided")
+
+    def embed_query(self, text: str) -> list[float]:
+        raise AssertionError("must not re-embed when vectors provided")
+
+
+def _chunk_with_text(text: str) -> Chunk:
+    source = Source(
+        document_id="d", document_title="t", chapter="c", course_code="", kind="k", language="vi"
+    )
+    return Chunk(source=source, text=text)
+
+
+def test_index_accepts_precomputed_vectors_without_embedding() -> None:
+    chunks = [_chunk_with_text("zzq wub florp"), _chunk_with_text("hoàn toàn khác biệt")]
+    embedder = HashEmbedder()
+    matrix = np.asarray(embedder.embed_batch([c.text for c in chunks]), dtype=np.float32)
+    idx = Index(chunks, ExplodingEmbedder(), vectors=matrix)
+    query_vector = np.asarray(embedder.embed_query("zzq wub florp"), dtype=np.float32)
+    ranked = idx.fused_ranking("zzq wub florp", query_vector)
+    assert ranked[0] == 0
+
+
+def test_index_vector_length_mismatch_raises() -> None:
+    chunks = [_chunk_with_text("mot"), _chunk_with_text("hai")]
+    bad = np.zeros((1, 32), dtype=np.float32)
+    with pytest.raises(ValueError, match="vectors"):
+        Index(chunks, ExplodingEmbedder(), vectors=bad)
+
+
+def test_rrf_merge_interleaves_two_rankings() -> None:
+    kb = [_chunk_with_text("k1"), _chunk_with_text("k2"), _chunk_with_text("k3")]
+    att = [_chunk_with_text("a1"), _chunk_with_text("a2")]
+    merged = rrf_merge([kb, att])
+    assert merged[0] is kb[0]
+    assert sorted(map(id, merged)) == sorted(map(id, kb + att))
+
+
+def test_rrf_merge_empty_rankings() -> None:
+    assert rrf_merge([[], []]) == []
