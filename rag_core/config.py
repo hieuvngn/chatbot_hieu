@@ -19,6 +19,8 @@ class Config:
     embed_model: str = DEFAULT_EMBED_MODEL
     embed_dim: int = DEFAULT_EMBED_DIM
     base_url: str = DEFAULT_BASE_URL
+    allow_medium: bool = True
+    enable_fallback: bool = True
 
 
 def load_config(
@@ -45,6 +47,13 @@ def load_config(
         )
 
     resolved_dir = Path(data_dir) if data_dir else Path(os.environ.get("RAG_DATA_DIR", DEFAULT_DATA_DIR))
+
+    def _parse_bool(key: str, default: bool) -> bool:
+        raw = os.environ.get(key)
+        if raw is None:
+            return default
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+
     return Config(
         api_key=resolved_key,
         data_dir=resolved_dir,
@@ -52,4 +61,6 @@ def load_config(
         embed_model=os.environ.get("RAG_EMBED_MODEL", DEFAULT_EMBED_MODEL),
         embed_dim=int(os.environ.get("RAG_EMBED_DIM", str(DEFAULT_EMBED_DIM))),
         base_url=os.environ.get("OPENROUTER_BASE_URL", DEFAULT_BASE_URL),
+        allow_medium=_parse_bool("RAG_ALLOW_MEDIUM", True),
+        enable_fallback=_parse_bool("RAG_ENABLE_FALLBACK", True),
     )
