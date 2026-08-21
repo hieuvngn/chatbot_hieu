@@ -148,12 +148,31 @@ def render_sidebar(user: User) -> None:
         metas = db.list_conversations(user.id)
         for meta in metas:
             is_active = meta.id == st.session_state.get("active_conversation_id")
-            label = f"{'▶ ' if is_active else ''}{meta.title[:35]}"
-            if st.button(label, key=f"chat_{meta.id}", use_container_width=True):
-                st.session_state["active_conversation_id"] = meta.id
-                st.session_state["show_profile"] = False
-                st.rerun()
-            st.caption(f"{meta.updated_at[:16]}  {meta.preview[:30]}")
+            cols = st.columns([4, 1])
+            with cols[0]:
+                label = f"{'▶ ' if is_active else ''}{meta.title[:35]}"
+                if st.button(label, key=f"chat_{meta.id}", use_container_width=True):
+                    st.session_state["active_conversation_id"] = meta.id
+                    st.session_state["show_profile"] = False
+                    st.rerun()
+            with cols[1]:
+                with st.popover("⋯", use_container_width=True):
+                    new_title = st.text_input("Đổi tên", value=meta.title, key=f"rename_{meta.id}")
+                    if st.button("Lưu", key=f"save_{meta.id}"):
+                        try:
+                            get_database().update_conversation_title(meta.id, new_title)
+                            st.rerun()
+                        except ValueError as e:
+                            st.error(str(e))
+                    if st.button("Xóa", key=f"del_{meta.id}", type="primary"):
+                        try:
+                            get_database().delete_conversation(meta.id)
+                            if st.session_state.get("active_conversation_id") == meta.id:
+                                st.session_state.pop("active_conversation_id", None)
+                            st.rerun()
+                        except KeyError as e:
+                            st.error(str(e))
+            st.caption(f"{meta.updated_at[:16]}  {meta.preview[:30]}", help=meta.preview)
         st.divider()
         display = user.display_name or user.username
         st.caption(f"👤 {display} ({user.username})")
