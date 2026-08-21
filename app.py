@@ -18,6 +18,7 @@ from __future__ import annotations
 import streamlit as st
 
 from rag_core import RagCore, build_rag_core
+from rag_core.attachments import MAX_FILES_PER_CONVERSATION, AttachmentStore
 from rag_core.config import load_config
 from rag_core.db import APP_DB_FILENAME, Database
 from rag_core.models import AnswerResult, Citation, Session, Turn, User
@@ -31,6 +32,12 @@ def get_database() -> Database:
 @st.cache_resource
 def get_core() -> RagCore:
     return build_rag_core()
+
+
+@st.cache_resource
+def get_attachment_store() -> AttachmentStore:
+    config = load_config()
+    return AttachmentStore(config.data_dir / APP_DB_FILENAME, get_core().embedder)
 
 
 def get_user() -> User | None:
@@ -101,6 +108,8 @@ def render_citations(citations: list[Citation]) -> None:
         with st.expander(label):
             st.write(f"Document: {source.document_title} ({source.document_id})")
             st.write(f"Chapter: {source.chapter}")
+            origin = "tài liệu đính kèm" if source.kind == "upload" else "kho tài liệu môn học"
+            st.write(f"Nguồn: {origin}")
             st.write(f"Course: {source.course_code}")
             st.write(f"Kind: {source.kind} ({source.language})")
 
@@ -130,6 +139,53 @@ def result_to_turn(result: AnswerResult) -> Turn:
         refused=result.refused,
         rephrase_suggestion=result.rephrase_suggestion,
     )
+
+
+_KIND_ICONS = {"pdf": "📄", "md": "📝", "txt": "🗒️"}
+
+
+def render_attachments() -> None:
+    session_id = st.session_state.get("active_conversation_id")
+    if not isinstance(session_id, str) or not session_id:
+        return
+    store = get_attachment_store()
+    metas = store.list_for(session_id)
+    label = f"📎 Tài liệu đính kèm ({len(metas)}/{MAX_FILES_PER_CONVERSATION})"
+    with st.sidebar.expander(label, expanded=bool(metas)):
+        for meta in metas:
+            icon = _KIND_ICONS.get(meta.file_kind, "📄")
+            cols = st.columns([4, 1])
+            cols[0].caption(
+                f"{icon} {meta.filename}\n\n{meta.chunk_count} đoạn · "
+                f"{max(1, meta.size_bytes // 1024)} KB"
+            )
+            with cols[1].popover("🗑️", use_container_width=True):
+                st.write(f"Xóa {meta.filename}?")
+                if st.button("Xóa", key=f"del_att_{meta.id}", type="primary"):
+                    try:
+                        store.delete(meta.id)
+                    except KeyError:
+                        pass
+                    st.rerun()
+        if len(metas) >= MAX_FILES_PER_CONVERSATION:
+            st.caption(
+                f"Đã đạt giới hạn {MAX_FILES_PER_CONVERSATION} tài liệu cho chat này."
+            )
+            return
+        uploaded = st.file_uploader(
+            "Thêm tài liệu (PDF/TXT/MD)", type=["pdf", "txt", "md"], key="att_uploader"
+        )
+        if uploaded is not None:
+            try:
+                user = st.session_state.get("user")
+                language = user.language if user is not None else "vi"
+                with st.spinner("Đang parse và embedding…"):
+                    meta = store.add(session_id, uploaded.name, uploaded.getvalue(), language)
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                st.toast(f"Đã xử lý {meta.filename}: {meta.chunk_count} đoạn.")
+                st.rerun()
 
 
 def render_sidebar(user: User) -> None:
@@ -171,6 +227,8 @@ def render_sidebar(user: User) -> None:
                         except KeyError as e:
                             st.error(str(e))
             st.caption(f"{meta.updated_at[:16]}  {meta.preview[:30]}", help=meta.preview)
+        st.divider()
+        render_attachments()
         st.divider()
         display = user.display_name or user.username
         st.caption(f"👤 {display} ({user.username})")

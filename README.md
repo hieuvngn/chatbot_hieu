@@ -130,6 +130,8 @@ Registers/logs in a demo user against SQLite, asks a first question (passed thro
 
 The user-facing app: login and register screens gate access to the chat; chat messages flow through `answer()` with the logged-in user's Session; every answer renders its Citations as clickable expanders showing document + chapter; refusals render distinctly with their rephrase suggestion. History — including Citations and refusals — is stored in SQLite and restored on the next login.
 
+- Upload PDF/TXT/MD làm nguồn tri thức tạm thời theo cuộc trò chuyện (citation kèm trang/heading).
+
 ### Running
 
 ```sh

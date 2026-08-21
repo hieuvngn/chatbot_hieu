@@ -285,6 +285,14 @@ Yêu cầu: `.env` phải có `OPENROUTER_API_KEY`, `data/courses.json` + `docum
 
 ---
 
+## Upload tài liệu (PDF/TXT/MD)
+
+- Trong sidebar mở **📎 Tài liệu đính kèm** của chat đang chọn: tối đa 3 file, mỗi file ≤ 5 MB (pdf/txt/md).
+- Nội dung được parse, chia đoạn, embedding và lưu theo chat; câu trả lời trích dẫn kèm vị trí (`Trang N` / heading).
+- Dependency mới: `pypdf` (đã có trong pyproject; chạy lại `uv sync` là đủ).
+
+---
+
 ## 9. Sử dụng như thư viện
 
 ```python
