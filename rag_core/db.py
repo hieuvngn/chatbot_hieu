@@ -7,7 +7,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from rag_core.attachments import ATTACHMENTS_SCHEMA_SQL
 from rag_core.models import MAX_TURNS, Citation, ConversationMeta, Session, Source, Turn, User
+
+APP_DB_FILENAME = "app.db"
 
 
 class Database:
@@ -96,6 +99,7 @@ class Database:
             );
             """
         )
+        conn.executescript(ATTACHMENTS_SCHEMA_SQL)
         self._ensure_conversation_index(conn)
         conn.commit()
 
@@ -276,6 +280,8 @@ class Database:
     def delete_conversation(self, session_id: str) -> None:
         with contextlib.closing(self._connect()) as conn:
             conn.execute("DELETE FROM messages WHERE conversation_id=?", (session_id,))
+            conn.execute("DELETE FROM attachment_chunks WHERE conversation_id=?", (session_id,))
+            conn.execute("DELETE FROM attachments WHERE conversation_id=?", (session_id,))
             cur = conn.execute("DELETE FROM conversations WHERE id=?", (session_id,))
             if cur.rowcount == 0:
                 raise KeyError(f"no such conversation: {session_id}")
@@ -285,6 +291,16 @@ class Database:
         with contextlib.closing(self._connect()) as conn:
             conn.execute(
                 "DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)",
+                (user_id,),
+            )
+            conn.execute(
+                "DELETE FROM attachment_chunks WHERE conversation_id IN "
+                "(SELECT id FROM conversations WHERE user_id=?)",
+                (user_id,),
+            )
+            conn.execute(
+                "DELETE FROM attachments WHERE conversation_id IN "
+                "(SELECT id FROM conversations WHERE user_id=?)",
                 (user_id,),
             )
             conn.execute("DELETE FROM conversations WHERE user_id=?", (user_id,))

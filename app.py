@@ -19,10 +19,8 @@ import streamlit as st
 
 from rag_core import RagCore, build_rag_core
 from rag_core.config import load_config
-from rag_core.db import Database
+from rag_core.db import APP_DB_FILENAME, Database
 from rag_core.models import AnswerResult, Citation, Session, Turn, User
-
-APP_DB_FILENAME = "app.db"
 
 
 @st.cache_resource

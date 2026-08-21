@@ -374,3 +374,45 @@ def test_get_or_create_session_backward_compat(tmp_path: Path) -> None:
     s3 = db.create_conversation(u.id, title="Extra")
     s4 = db.get_or_create_session(u.id)
     assert s4.id == s3.id  # most recent
+
+
+def _attachment_count(db_path: Path) -> int:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return int(conn.execute("SELECT COUNT(*) FROM attachments").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def _insert_attachment_row(db_path: Path, conv_id: str) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO attachments (id, conversation_id, filename, file_kind, "
+            "size_bytes, chunk_count, language, created_at) "
+            "VALUES ('a1', ?, 'note.txt', 'txt', 10, 1, 'vi', '2026-01-01')",
+            (conv_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_delete_conversation_cascades_attachments(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    db = Database(db_path)
+    user = db.register("hieu", "pw")
+    conv = db.create_conversation(user.id)
+    _insert_attachment_row(db_path, conv.id)
+    db.delete_conversation(conv.id)
+    assert _attachment_count(db_path) == 0
+
+
+def test_clear_all_cascades_attachments(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    db = Database(db_path)
+    user = db.register("hieu", "pw")
+    conv = db.create_conversation(user.id)
+    _insert_attachment_row(db_path, conv.id)
+    db.clear_all_conversations(user.id)
+    assert _attachment_count(db_path) == 0
