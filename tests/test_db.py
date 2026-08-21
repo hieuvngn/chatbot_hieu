@@ -263,3 +263,114 @@ def test_legacy_db_migrates_users_and_conversations(tmp_path: Path) -> None:
     s2 = db.create_conversation(u.id, title="Second")
     assert s2.id != "c1"
     assert len(db.list_conversations(u.id)) == 2
+
+
+def test_create_multiple_conversations_per_user(tmp_path: Path) -> None:
+    from rag_core.db import Database
+
+    db = Database(tmp_path / "test.db")
+    u = db.register("alice", "pw")
+    c1 = db.create_conversation(u.id, title="Chat 1")
+    c2 = db.create_conversation(u.id, title="Chat 2")
+    assert c1.id != c2.id
+    metas = db.list_conversations(u.id)
+    assert len(metas) == 2
+    assert {m.title for m in metas} == {"Chat 1", "Chat 2"}
+
+
+def test_list_conversations_ordered_by_updated_at(tmp_path: Path) -> None:
+    from rag_core.db import Database
+    import time
+
+    db = Database(tmp_path / "test.db")
+    u = db.register("bob", "pw")
+    c1 = db.create_conversation(u.id, title="Old")
+    time.sleep(0.01)
+    c2 = db.create_conversation(u.id, title="New")
+    # New should be first (DESC)
+    metas = db.list_conversations(u.id)
+    assert metas[0].id == c2.id
+    # after appending to Old, it becomes first
+    db.append_exchange(c1.id, "hi", "hello")
+    metas2 = db.list_conversations(u.id)
+    assert metas2[0].id == c1.id
+
+
+def test_append_exchange_auto_titles_first_message(tmp_path: Path) -> None:
+    from rag_core.db import Database
+
+    db = Database(tmp_path / "test.db")
+    u = db.register("hieu", "pw")
+    s = db.create_conversation(u.id)  # default "New chat"
+    assert db.list_conversations(u.id)[0].title == "New chat"
+    db.append_exchange(s.id, "giải thích bảng băm là gì?", "answer")
+    assert db.list_conversations(u.id)[0].title == "giải thích bảng băm là gì?"
+    # second exchange should NOT overwrite title
+    db.append_exchange(s.id, "câu 2", "ans2")
+    assert db.list_conversations(u.id)[0].title == "giải thích bảng băm là gì?"
+
+
+def test_append_truncates_title_40(tmp_path: Path) -> None:
+    from rag_core.db import Database
+
+    db = Database(tmp_path / "test.db")
+    u = db.register("hieu", "pw")
+    s = db.create_conversation(u.id)
+    long_text = "a" * 100
+    db.append_exchange(s.id, long_text, "ans")
+    assert len(db.list_conversations(u.id)[0].title) == 40
+
+
+def test_update_user_profile(tmp_path: Path) -> None:
+    from rag_core.db import Database
+
+    db = Database(tmp_path / "test.db")
+    u = db.register("hieu", "pw")
+    updated = db.update_user_profile(u.id, display_name="Hiếu Nguyễn", language="en")
+    assert updated.display_name == "Hiếu Nguyễn"
+    assert updated.language == "en"
+    # persist
+    assert db.login("hieu", "pw").language == "en"
+
+
+def test_update_user_profile_validation(tmp_path: Path) -> None:
+    from rag_core.db import Database
+    import pytest
+
+    db = Database(tmp_path / "test.db")
+    u = db.register("hieu", "pw")
+    with pytest.raises(ValueError):
+        db.update_user_profile(u.id, display_name="")
+    with pytest.raises(ValueError):
+        db.update_user_profile(u.id, display_name="a" * 51)
+    with pytest.raises(ValueError):
+        db.update_user_profile(u.id, language="fr")
+
+
+def test_delete_and_clear(tmp_path: Path) -> None:
+    from rag_core.db import Database
+
+    db = Database(tmp_path / "test.db")
+    u = db.register("hieu", "pw")
+    c1 = db.create_conversation(u.id, title="A")
+    c2 = db.create_conversation(u.id, title="B")
+    db.append_exchange(c1.id, "hi", "hello")
+    db.delete_conversation(c1.id)
+    assert len(db.list_conversations(u.id)) == 1
+    assert db.list_conversations(u.id)[0].id == c2.id
+    db.clear_all_conversations(u.id)
+    assert db.list_conversations(u.id) == []
+
+
+def test_get_or_create_session_backward_compat(tmp_path: Path) -> None:
+    from rag_core.db import Database
+
+    db = Database(tmp_path / "test.db")
+    u = db.register("hieu", "pw")
+    s1 = db.get_or_create_session(u.id)
+    s2 = db.get_or_create_session(u.id)
+    assert s1.id == s2.id
+    # after creating extra, wrapper returns most recent (first in DESC)
+    s3 = db.create_conversation(u.id, title="Extra")
+    s4 = db.get_or_create_session(u.id)
+    assert s4.id == s3.id  # most recent

@@ -233,6 +233,55 @@ class Database:
                 for r in rows
             ]
 
+    def update_user_profile(
+        self, user_id: int, display_name: str | None = None, language: str | None = None
+    ) -> User:
+        if display_name is not None:
+            if not (1 <= len(display_name.strip()) <= 50):
+                raise ValueError("display_name must be 1..50 chars")
+            display_name = display_name.strip()
+        if language is not None and language not in ("vi", "en"):
+            raise ValueError("language must be 'vi' or 'en'")
+        with self._connect() as conn:
+            if display_name is not None:
+                conn.execute("UPDATE users SET display_name=? WHERE id=?", (display_name, user_id))
+            if language is not None:
+                conn.execute("UPDATE users SET language=? WHERE id=?", (language, user_id))
+            conn.commit()
+        user = self.get_user(user_id)
+        assert user is not None
+        return user
+
+    def update_conversation_title(self, session_id: str, title: str) -> None:
+        title = title.strip()
+        if not (1 <= len(title) <= 50):
+            raise ValueError("title must be 1..50 chars")
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE conversations SET title=?, updated_at=? WHERE id=?",
+                (title[:50], self._now(), session_id),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(f"no such conversation: {session_id}")
+            conn.commit()
+
+    def delete_conversation(self, session_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM messages WHERE conversation_id=?", (session_id,))
+            cur = conn.execute("DELETE FROM conversations WHERE id=?", (session_id,))
+            if cur.rowcount == 0:
+                raise KeyError(f"no such conversation: {session_id}")
+            conn.commit()
+
+    def clear_all_conversations(self, user_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)",
+                (user_id,),
+            )
+            conn.execute("DELETE FROM conversations WHERE user_id=?", (user_id,))
+            conn.commit()
+
     def get_or_create_session(self, user_id: int) -> Session:
         metas = self.list_conversations(user_id)
         if metas:
@@ -302,6 +351,29 @@ class Database:
                     ),
                 ],
             )
+            # update updated_at and auto title
+            now = self._now()
+            cnt = conn.execute(
+                "SELECT COUNT(*) AS c FROM messages WHERE conversation_id=?", (session_id,)
+            ).fetchone()["c"]
+            if cnt == 2:
+                cur_title = conn.execute(
+                    "SELECT title FROM conversations WHERE id=?", (session_id,)
+                ).fetchone()
+                if cur_title and cur_title["title"] == "New chat":
+                    new_title = user_text.strip()[:40] or "New chat"
+                    conn.execute(
+                        "UPDATE conversations SET title=?, updated_at=? WHERE id=?",
+                        (new_title, now, session_id),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE conversations SET updated_at=? WHERE id=?", (now, session_id)
+                    )
+            else:
+                conn.execute(
+                    "UPDATE conversations SET updated_at=? WHERE id=?", (now, session_id)
+                )
             conn.commit()
 
     @staticmethod
