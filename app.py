@@ -39,6 +39,23 @@ def get_user() -> User | None:
     return st.session_state.get("user")
 
 
+def get_active_conversation_id(user: User, db: Database) -> str:
+    active = st.session_state.get("active_conversation_id")
+    if isinstance(active, str) and active:
+        try:
+            db.get_session(active)
+            return active
+        except KeyError:
+            pass
+    metas = db.list_conversations(user.id)
+    if metas:
+        st.session_state["active_conversation_id"] = metas[0].id
+        return metas[0].id
+    session = db.create_conversation(user.id, title="New chat")
+    st.session_state["active_conversation_id"] = session.id
+    return session.id
+
+
 def render_auth() -> None:
     st.title("CourseMate")
     st.caption("Course advisory and knowledge Q&A grounded in study documents.")
@@ -90,6 +107,10 @@ def render_citations(citations: list[Citation]) -> None:
             st.write(f"Kind: {source.kind} ({source.language})")
 
 
+def _is_fallback(text: str) -> bool:
+    return text.startswith("Lưu ý:") or text.startswith("Note:")
+
+
 def render_turn(turn: Turn) -> None:
     with st.chat_message(turn.role):
         if turn.role == "assistant" and turn.refused:
@@ -97,6 +118,8 @@ def render_turn(turn: Turn) -> None:
             if turn.rephrase_suggestion:
                 st.caption(f"Rephrase suggestion: {turn.rephrase_suggestion}")
             return
+        if turn.role == "assistant" and _is_fallback(turn.text) and not turn.citations:
+            st.info("No relevant material was found in the course corpus — answer based on general knowledge (no citations).")
         st.write(turn.text)
         render_citations(turn.citations)
 
@@ -111,34 +134,62 @@ def result_to_turn(result: AnswerResult) -> Turn:
     )
 
 
-def render_chat(user: User) -> None:
-    st.title("CourseMate")
-    st.caption(f"Logged in as {user.username}")
-    if st.button("Log out"):
-        del st.session_state["user"]
+def render_sidebar(user: User) -> None:
+    db = get_database()
+    with st.sidebar:
+        st.title("CourseMate")
+        if st.button("＋ Tạo chat mới", use_container_width=True, key="new_chat"):
+            sess = db.create_conversation(user.id, title="New chat")
+            st.session_state["active_conversation_id"] = sess.id
+            st.session_state["show_profile"] = False
+            st.rerun()
+        st.divider()
+        st.caption("Lịch sử chat")
+        metas = db.list_conversations(user.id)
+        for meta in metas:
+            is_active = meta.id == st.session_state.get("active_conversation_id")
+            label = f"{'▶ ' if is_active else ''}{meta.title[:35]}"
+            if st.button(label, key=f"chat_{meta.id}", use_container_width=True):
+                st.session_state["active_conversation_id"] = meta.id
+                st.session_state["show_profile"] = False
+                st.rerun()
+            st.caption(f"{meta.updated_at[:16]}  {meta.preview[:30]}")
+        st.divider()
+        display = user.display_name or user.username
+        st.caption(f"👤 {display} ({user.username})")
+        if st.button("Profile / Setting", use_container_width=True, key="open_profile"):
+            st.session_state["show_profile"] = True
+            st.rerun()
+        if st.button("Log out", key="logout_sidebar"):
+            del st.session_state["user"]
+            st.session_state.pop("active_conversation_id", None)
+            st.session_state.pop("show_profile", None)
+            st.rerun()
+
+
+def render_profile(user: User) -> None:
+    st.title("Profile / Setting")
+    st.write(f"Tên hiển thị: {user.display_name}")
+    if st.button("Quay lại chat"):
+        st.session_state["show_profile"] = False
         st.rerun()
 
-    db = get_database()
-    session = db.get_or_create_session(user.id)
 
+def render_chat(user: User) -> None:
+    db = get_database()
+    session_id = get_active_conversation_id(user, db)
+    session = db.get_session(session_id)
+    st.title("CourseMate")
     for turn in session.turns:
         render_turn(turn)
-
     prompt = st.chat_input("Ask about courses or study material (e.g. 'giải thích bảng băm là gì?')")
     if prompt:
         with st.chat_message("user"):
             st.write(prompt)
         with st.spinner("Retrieving material and composing the answer..."):
             result = get_core().answer(prompt, session)
-        db.append_exchange(
-            session.id,
-            prompt,
-            result.answer,
-            citations=result.citations,
-            refused=result.refused,
-            rephrase_suggestion=result.rephrase_suggestion,
-        )
-        render_turn(result_to_turn(result))
+        db.append_exchange(session_id, prompt, result.answer, citations=result.citations, refused=result.refused, rephrase_suggestion=result.rephrase_suggestion)
+        st.rerun()
 
 
 def main() -> None:
@@ -148,12 +199,20 @@ def main() -> None:
     except ValueError as exc:
         st.error(str(exc))
         st.stop()
-
     user = get_user()
     if user is None:
         render_auth()
         st.stop()
-    render_chat(user)
+    db = get_database()
+    refreshed = db.get_user(user.id)
+    if refreshed:
+        st.session_state["user"] = refreshed
+        user = refreshed
+    render_sidebar(user)
+    if st.session_state.get("show_profile"):
+        render_profile(user)
+    else:
+        render_chat(user)
 
 
 if __name__ == "__main__":
