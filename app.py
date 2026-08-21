@@ -185,6 +185,7 @@ def render_attachments() -> None:
                 st.error(str(exc))
             else:
                 st.toast(f"Đã xử lý {meta.filename}: {meta.chunk_count} đoạn.")
+                st.session_state.pop("att_uploader", None)
                 st.rerun()
 
 
