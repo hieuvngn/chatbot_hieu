@@ -213,3 +213,53 @@ def test_old_schema_database_migrates_in_place(tmp_path: Path) -> None:
     assert resumed.turns[2].citations[0].marker == "1"
     assert resumed.turns[2].refused is True
     assert resumed.turns[2].rephrase_suggestion == "Try again."
+
+
+def test_register_sets_display_name_and_language(tmp_path: Path) -> None:
+    from rag_core.db import Database
+
+    db = Database(tmp_path / "test.db")
+    user = db.register("hieu", "pw")
+    assert user.display_name == "hieu"
+    assert user.language == "vi"
+    # login also returns new fields
+    logged = db.login("hieu", "pw")
+    assert logged is not None
+    assert logged.display_name == "hieu"
+    assert logged.language == "vi"
+
+
+def test_get_user_returns_profile(tmp_path: Path) -> None:
+    from rag_core.db import Database
+
+    db = Database(tmp_path / "test.db")
+    u = db.register("alice", "pw")
+    fetched = db.get_user(u.id)
+    assert fetched is not None
+    assert fetched.username == "alice"
+    assert fetched.display_name == "alice"
+
+
+def test_legacy_db_migrates_users_and_conversations(tmp_path: Path) -> None:
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript("""
+    CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE TABLE conversations (id TEXT PRIMARY KEY, user_id INTEGER UNIQUE NOT NULL REFERENCES users(id), created_at TEXT NOT NULL);
+    CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL REFERENCES conversations(id), role TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL);
+    """)
+    conn.execute("INSERT INTO users (id, username, password, created_at) VALUES (1, 'hieu', 'pw', 'now')")
+    conn.execute("INSERT INTO conversations (id, user_id, created_at) VALUES ('c1', 1, 'now')")
+    conn.commit()
+    conn.close()
+    from rag_core.db import Database
+
+    db = Database(path)
+    u = db.login("hieu", "pw")
+    assert u is not None and u.display_name == "hieu" and u.language == "vi"
+    # after migrate, should allow second conversation
+    s2 = db.create_conversation(u.id, title="Second")
+    assert s2.id != "c1"
+    assert len(db.list_conversations(u.id)) == 2

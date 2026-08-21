@@ -40,6 +40,18 @@ class AnswerResult:
 class User:
     id: int
     username: str
+    display_name: str
+    language: str
+
+
+@dataclass(frozen=True)
+class ConversationMeta:
+    id: str
+    user_id: int
+    title: str
+    created_at: str
+    updated_at: str
+    preview: str
 
 
 @dataclass

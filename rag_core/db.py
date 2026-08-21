@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from rag_core.models import MAX_TURNS, Citation, Session, Source, Turn, User
+from rag_core.models import MAX_TURNS, Citation, ConversationMeta, Session, Source, Turn, User
 
 
 class Database:
@@ -14,27 +14,55 @@ class Database:
 
     Passwords are stored in plaintext by explicit demo choice — this is a
     demo database, not a security boundary.
+
+    Thread-safety:
+    Streamlit's ``st.cache_resource`` caches the ``Database`` instance and
+    reuses it across script reruns that may execute on different threads.
+    The original implementation held a single ``sqlite3.Connection`` (which
+    is bound to its creating thread when ``check_same_thread=True``) and
+    therefore raised ``ProgrammingError`` on the next rerun.  This class now
+    opens a **new connection per operation** with ``check_same_thread=False``
+    so it can be safely reused from any thread.  A deprecated long-lived
+    handle is still kept as ``self._conn`` for backwards compatibility with
+    code that accesses it directly.
     """
 
     def __init__(self, path: str | Path) -> None:
-        self._conn = sqlite3.connect(str(path))
-        self._conn.row_factory = sqlite3.Row
-        self._create_schema()
-        self._migrate()
+        self._path = Path(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as conn:
+            self._create_schema(conn)
+            self._migrate(conn)
+        # Deprecated handle kept for backwards compat (tests call close(),
+        # external code may access db._conn).  Created with
+        # check_same_thread=False so cross-thread access does not raise
+        # ProgrammingError, but internal methods do NOT use it.
+        self._conn = self._connect()
 
-    def _create_schema(self) -> None:
-        self._conn.executescript(
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(
+            str(self._path), check_same_thread=False, timeout=30.0
+        )
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _create_schema(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
                 password TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                language TEXT NOT NULL DEFAULT 'vi',
                 created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
-                user_id INTEGER UNIQUE NOT NULL REFERENCES users(id),
-                created_at TEXT NOT NULL
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                title TEXT NOT NULL DEFAULT 'New chat',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,13 +76,20 @@ class Database:
             );
             """
         )
-        self._conn.commit()
+        # Index for ordering; may fail on legacy DB where updated_at not yet migrated — ignore.
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at DESC)"
+            )
+        except sqlite3.OperationalError:
+            pass
+        conn.commit()
 
-    def _migrate(self) -> None:
+    def _migrate(self, conn: sqlite3.Connection) -> None:
         """Add the assistant-message metadata columns to pre-existing tables."""
         columns = {
             row["name"]
-            for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()
+            for row in conn.execute("PRAGMA table_info(messages)").fetchall()
         }
         for column, ddl in [
             ("citations", "ALTER TABLE messages ADD COLUMN citations TEXT"),
@@ -68,70 +103,165 @@ class Database:
             ),
         ]:
             if column not in columns:
-                self._conn.execute(ddl)
-        self._conn.commit()
+                conn.execute(ddl)
+        # users columns
+        user_cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "display_name" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
+            conn.execute("UPDATE users SET display_name = username WHERE display_name = ''")
+        if "language" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'vi'")
+        # conversations columns
+        conv_cols = {r["name"] for r in conn.execute("PRAGMA table_info(conversations)").fetchall()}
+        if "title" not in conv_cols:
+            conn.execute("ALTER TABLE conversations ADD COLUMN title TEXT NOT NULL DEFAULT 'New chat'")
+        if "updated_at" not in conv_cols:
+            conn.execute("ALTER TABLE conversations ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
+            conn.execute("UPDATE conversations SET updated_at = created_at WHERE updated_at = ''")
+        # handle UNIQUE on user_id: detect via PRAGMA index_list
+        for idx in conn.execute("PRAGMA index_list('conversations')").fetchall():
+            if idx["unique"] == 1:
+                # check if this index covers user_id
+                info = conn.execute(f"PRAGMA index_info('{idx['name']}')").fetchall()
+                if any(r["name"] == "user_id" for r in info):
+                    # recreate table without UNIQUE
+                    conn.executescript("""
+                    CREATE TABLE conversations_new (
+                        id TEXT PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        title TEXT NOT NULL DEFAULT 'New chat',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    INSERT INTO conversations_new (id, user_id, title, created_at, updated_at)
+                        SELECT id, user_id, COALESCE(title, 'New chat'), created_at, COALESCE(updated_at, created_at) FROM conversations;
+                    DROP TABLE conversations;
+                    ALTER TABLE conversations_new RENAME TO conversations;
+                    CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at DESC);
+                    """)
+                    break
+        # Ensure index exists after migration (for legacy DB where _create_schema skipped it)
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at DESC)"
+            )
+        except sqlite3.OperationalError:
+            pass
+        conn.commit()
 
     def close(self) -> None:
-        self._conn.close()
+        try:
+            self._conn.close()
+        except Exception:
+            pass
 
     def register(self, username: str, password: str) -> User:
-        try:
-            cursor = self._conn.execute(
-                "INSERT INTO users (username, password, created_at) VALUES (?, ?, ?)",
-                (username, password, self._now()),
-            )
-        except sqlite3.IntegrityError:
-            raise ValueError(f"username already taken: {username}") from None
-        self._conn.commit()
-        lastrowid = cursor.lastrowid
-        assert lastrowid is not None, "AUTOINCREMENT always sets lastrowid"
-        return User(id=lastrowid, username=username)
+        with self._connect() as conn:
+            try:
+                cursor = conn.execute(
+                    "INSERT INTO users (username, password, display_name, language, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (username, password, username, "vi", self._now()),
+                )
+            except sqlite3.IntegrityError:
+                raise ValueError(f"username already taken: {username}") from None
+            conn.commit()
+            lastrowid = cursor.lastrowid
+            assert lastrowid is not None, "AUTOINCREMENT always sets lastrowid"
+            return User(id=lastrowid, username=username, display_name=username, language="vi")
 
     def login(self, username: str, password: str) -> User | None:
-        row = self._conn.execute(
-            "SELECT id, username FROM users WHERE username = ? AND password = ?",
-            (username, password),
-        ).fetchone()
-        if row is None:
-            return None
-        return User(id=row["id"], username=row["username"])
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, username, display_name, language FROM users WHERE username = ? AND password = ?",
+                (username, password),
+            ).fetchone()
+            if row is None:
+                return None
+            return User(
+                id=int(row["id"]),
+                username=str(row["username"]),
+                display_name=str(row["display_name"] or row["username"]),
+                language=str(row["language"] or "vi"),
+            )
 
-    def get_or_create_session(self, user_id: int) -> Session:
-        row = self._conn.execute(
-            "SELECT id FROM conversations WHERE user_id = ?", (user_id,)
-        ).fetchone()
-        if row is not None:
-            return self.get_session(row["id"])
+    def get_user(self, user_id: int) -> User | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, username, display_name, language FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return User(
+                id=int(row["id"]),
+                username=str(row["username"]),
+                display_name=str(row["display_name"] or row["username"]),
+                language=str(row["language"] or "vi"),
+            )
+
+    def create_conversation(self, user_id: int, title: str = "New chat") -> Session:
         session_id = uuid.uuid4().hex
-        self._conn.execute(
-            "INSERT INTO conversations (id, user_id, created_at) VALUES (?, ?, ?)",
-            (session_id, user_id, self._now()),
-        )
-        self._conn.commit()
+        now = self._now()
+        title = title.strip()[:50] or "New chat"
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO conversations (id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (session_id, user_id, title, now, now),
+            )
+            conn.commit()
         return Session(id=session_id, user_id=str(user_id), turns=[])
 
+    def list_conversations(self, user_id: int) -> list[ConversationMeta]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT c.id, c.user_id, c.title, c.created_at, c.updated_at,
+                       (SELECT text FROM messages WHERE conversation_id=c.id AND role='user' ORDER BY id ASC LIMIT 1) AS preview
+                FROM conversations c WHERE c.user_id=? ORDER BY c.updated_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+            return [
+                ConversationMeta(
+                    id=str(r["id"]),
+                    user_id=int(r["user_id"]),
+                    title=str(r["title"]),
+                    created_at=str(r["created_at"]),
+                    updated_at=str(r["updated_at"]),
+                    preview=str((r["preview"] or "")[:40]),
+                )
+                for r in rows
+            ]
+
+    def get_or_create_session(self, user_id: int) -> Session:
+        metas = self.list_conversations(user_id)
+        if metas:
+            return self.get_session(metas[0].id)
+        return self.create_conversation(user_id, title="New chat")
+
     def get_session(self, session_id: str) -> Session:
-        conversation = self._conn.execute(
-            "SELECT user_id FROM conversations WHERE id = ?", (session_id,)
-        ).fetchone()
-        if conversation is None:
-            raise KeyError(f"no such conversation: {session_id}")
-        rows = self._conn.execute(
-            "SELECT role, text, citations, refused, rephrase_suggestion "
-            "FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
-            (session_id, MAX_TURNS),
-        ).fetchall()
-        turns = [
-            Turn(
-                role=row["role"],
-                text=row["text"],
-                citations=self._parse_citations(row["citations"]),
-                refused=bool(row["refused"]),
-                rephrase_suggestion=row["rephrase_suggestion"] or "",
-            )
-            for row in reversed(rows)
-        ]
-        return Session(id=session_id, user_id=str(conversation["user_id"]), turns=turns)
+        with self._connect() as conn:
+            conversation = conn.execute(
+                "SELECT user_id FROM conversations WHERE id = ?", (session_id,)
+            ).fetchone()
+            if conversation is None:
+                raise KeyError(f"no such conversation: {session_id}")
+            rows = conn.execute(
+                "SELECT role, text, citations, refused, rephrase_suggestion "
+                "FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+                (session_id, MAX_TURNS),
+            ).fetchall()
+            turns = [
+                Turn(
+                    role=row["role"],
+                    text=row["text"],
+                    citations=self._parse_citations(row["citations"]),
+                    refused=bool(row["refused"]),
+                    rephrase_suggestion=row["rephrase_suggestion"] or "",
+                )
+                for row in reversed(rows)
+            ]
+            return Session(id=session_id, user_id=str(conversation["user_id"]), turns=turns)
 
     def append_exchange(
         self,
@@ -155,23 +285,24 @@ class Database:
             if citations
             else None
         )
-        self._conn.executemany(
-            "INSERT INTO messages (conversation_id, role, text, created_at, "
-            "citations, refused, rephrase_suggestion) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [
-                (session_id, "user", user_text, self._now(), None, 0, ""),
-                (
-                    session_id,
-                    "assistant",
-                    assistant_text,
-                    self._now(),
-                    citations_json,
-                    int(refused),
-                    rephrase_suggestion,
-                ),
-            ],
-        )
-        self._conn.commit()
+        with self._connect() as conn:
+            conn.executemany(
+                "INSERT INTO messages (conversation_id, role, text, created_at, "
+                "citations, refused, rephrase_suggestion) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (session_id, "user", user_text, self._now(), None, 0, ""),
+                    (
+                        session_id,
+                        "assistant",
+                        assistant_text,
+                        self._now(),
+                        citations_json,
+                        int(refused),
+                        rephrase_suggestion,
+                    ),
+                ],
+            )
+            conn.commit()
 
     @staticmethod
     def _parse_citations(raw: str | None) -> list[Citation]:
