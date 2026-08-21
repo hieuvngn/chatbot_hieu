@@ -2,6 +2,8 @@
 
 A demo chatbot for IT students: course advisory and knowledge Q&A grounded in study documents, built on a retrieval-augmented generation pipeline. See `.scratch/coursemate-rag/spec.md` for the full specification.
 
+> **Hướng dẫn cài đặt & chạy chi tiết:** xem [`docs/SETUP.md`](docs/SETUP.md) — bao gồm cài `uv`, tạo `.env`, sinh data, chạy demo/eval/UI, và troubleshooting.
+
 ## Synthetic data generator
 
 The whole demo runs on synthetic data — there is no real institutional data. `generate_data.py` produces the dataset deterministically (seeded), so any machine can reproduce identical output.
@@ -56,7 +58,7 @@ Tests assert the external contract of the generator: course count and fields, DA
 
 ## Naive RAG core
 
-The `rag_core` package ingests the synthetic data into chunks, builds a hybrid FAISS (dense) + BM25 (lexical) index, and answers questions through its single public entry point `answer(user_message, session)`. The pipeline order: hybrid retrieval (BM25 top-20 + dense top-20 fused by Reciprocal Rank Fusion at k=60) → re-ranking → generation from the top-5 Sources.
+The `rag_core` package ingests the synthetic data into chunks, builds a hybrid FAISS (dense) + BM25 (lexical) index, and answers questions through its single public entry point `answer(user_message, session)`. The pipeline order: hybrid retrieval (BM25 top-20 + dense top-20 fused by Reciprocal Rank Fusion at k=60) → generation from the top-5 Sources.
 
 ### Setup
 
@@ -66,7 +68,7 @@ Requires an OpenRouter API key. Create a `.env` file in the repo root:
 OPENROUTER_API_KEY=sk-or-...
 ```
 
-The embedding model (`nvidia/nemotron-3-embed-1b:free`, 2048-dim) and the LLM (`gpt-4o-mini`) both go through the OpenAI-compatible OpenRouter endpoint. Model names and the data directory are configurable via environment variables (`RAG_LLM_MODEL`, `RAG_EMBED_MODEL`, `RAG_EMBED_DIM`, `RAG_RERANK_MODEL`, `RAG_DATA_DIR`, `OPENROUTER_BASE_URL`).
+The embedding model (`nvidia/nemotron-3-embed-1b:free`, 2048-dim) and the LLM (`gpt-4o-mini`) both go through the OpenAI-compatible OpenRouter endpoint. Model names and the data directory are configurable via environment variables (`RAG_LLM_MODEL`, `RAG_EMBED_MODEL`, `RAG_EMBED_DIM`, `RAG_DATA_DIR`, `OPENROUTER_BASE_URL`).
 
 ### Usage
 
@@ -82,24 +84,12 @@ for citation in result.citations:
 
 `AnswerResult` carries the answer text, its `Citations` (the `[n]` markers in the answer mapped back to their Sources), and the ordered top-5 `Sources` used. All index units are embedded in a single batched request at build time; queries are embedded one per call.
 
-## Re-ranking
-
-Between retrieval and generation, the RRF-fused top-20 candidates are scored by a cross-encoder re-ranker (`BAAI/bge-reranker-v2-m3`) that runs locally on GPU (CPU fallback when CUDA is unavailable). The re-ranked top-10 chunks are deduplicated to the final top-5 Sources passed to generation, replacing the raw RRF top-5. `build_rag_core()` wires the re-ranker in automatically.
-
-### Demo script
-
-```sh
-uv run python -m demo_rerank "giải thích bảng băm là gì?"
-```
-
-Prints the fused top-20 in pre-rerank order, the post-rerank top-10, the final top-5 Sources, and a generated answer with its citations, so the effect of this layer is visible side by side.
-
 ## CRAG judge
 
-Between re-ranking and generation, the quality gate decides whether the retrieved top-5 Sources are trustworthy enough to answer from. An LLM judge scores them high / medium / low:
+Between retrieval and generation, the quality gate decides whether the retrieved top-5 Sources are trustworthy enough to answer from. An LLM judge scores them high / medium / low:
 
 - **high** — the sources directly answer the question; the pipeline answers from them as-is.
-- **medium / low** — the pipeline Refines exactly once: a query rewrite (exact keywords, pronouns dropped) followed by a full re-retrieval and re-ranking. If the judge is still not high after that single refine, the pipeline refuses with a rephrase suggestion.
+- **medium / low** — the pipeline Refines exactly once: a query rewrite (exact keywords, pronouns dropped) followed by a full re-retrieval. If the judge is still not high after that single refine, the pipeline refuses with a rephrase suggestion.
 - A refusal returns an empty answer with no Citations and never calls the generator — no hallucinated or unsupported answer is ever served.
 
 The `AnswerResult` carries two extra fields when it refuses: `refused=True` and a `rephrase_suggestion`. `build_rag_core()` wires the judge and rewriter in automatically.
@@ -126,7 +116,7 @@ Prints the top-5 Sources, the draft answer, the verifier's verdict with the name
 
 ## Memory, auth, and database
 
-Per-user persistence and conversational context: a SQLite database (`rag_core/db.py`) with `users`, `conversations` (one per user), and `messages` tables. Register and login by username/password (passwords stored in plaintext by explicit demo choice). Each user has a single Session that persists the last 6 turns across visits. Before retrieval, an LLM pass (`rag_core/rewrite.py`) rewrites a follow-up message into a standalone question using the session history; first messages pass through unchanged. `answer(user_message, session)` consumes the Session and the rewritten query flows through the whole pipeline (retrieval → re-ranking → judge → generation → answer check). `build_rag_core()` wires the session rewriter in automatically.
+Per-user persistence and conversational context: a SQLite database (`rag_core/db.py`) with `users`, `conversations` (one per user), and `messages` tables. Register and login by username/password (passwords stored in plaintext by explicit demo choice). Each user has a single Session that persists the last 6 turns across visits. Before retrieval, an LLM pass (`rag_core/rewrite.py`) rewrites a follow-up message into a standalone question using the session history; first messages pass through unchanged. `answer(user_message, session)` consumes the Session and the rewritten query flows through the whole pipeline (retrieval → judge → generation → answer check). `build_rag_core()` wires the session rewriter in automatically.
 
 ### Demo script
 
@@ -146,7 +136,7 @@ The user-facing app: login and register screens gate access to the chat; chat me
 uv run streamlit run app.py
 ```
 
-Requires `OPENROUTER_API_KEY` in `.env` and the local-GPU dependencies (torch, transformers) for the re-ranker. The app database (`data/app.db`) is created on first run.
+Requires `OPENROUTER_API_KEY` in `.env`. The app database (`data/app.db`) is created on first run.
 
 ## Naive RAG core demo
 
@@ -160,10 +150,10 @@ Prints the ingested unit count, the single-batched embedding step, the fused ret
 
 `eval.py` computes the report numbers over a hand-made bilingual set of 20 question/ground-truth pairs (`eval_set.json`, 10 Vietnamese + 10 English, each pointing at the document + chapter the answer must come from). It measures, per question and in aggregate:
 
-- **Retrieval hit@5** — was the ground-truth Source among the top-5 Sources retrieved, on the naive path (RRF top-5) and on the full path (re-rank + dedupe)?
+- **Retrieval hit@5** — was the ground-truth Source among the top-5 Sources retrieved (RRF top-5)?
 - **Citation precision** — of the Citations the generated answer returned, how many point at the ground-truth Source? Answers the pipeline refused carry no Citations and are excluded from the precision mean (reported separately as refusals), so policy-correct refusals never penalize precision.
 
-The summary table shows naive vs. full side by side — the regression check that the quality layers (re-ranking, CRAG judge, answer check) help.
+The summary table shows naive vs. full side by side — the regression check that the quality layers (CRAG judge, answer check) help.
 
 ```sh
 uv run python -m eval                      # full eval: retrieval + LLM generation

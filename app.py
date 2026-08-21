@@ -10,8 +10,7 @@ Citations and refusals — is restored on the next login from SQLite.
 Run from the repo root:
     uv run streamlit run app.py
 
-Requires OPENROUTER_API_KEY in .env (see README.md) and the local-GPU
-dependencies (torch, transformers) for the re-ranker.
+Requires OPENROUTER_API_KEY in .env (see README.md / docs/SETUP.md).
 """
 
 from __future__ import annotations

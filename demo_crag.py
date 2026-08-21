@@ -1,15 +1,14 @@
 """Demo for the CRAG judge, refine and refusal layer (ticket 04).
 
 Shows the quality gate: the judge's verdict (high / medium / low) on the
-top-5 Sources, the refine pass (query rewrite + full re-retrieval and
-re-ranking) when the verdict is not high, and the final decision — a
-grounded answer or a refusal with a rephrase suggestion.
+top-5 Sources, the refine pass (query rewrite + full re-retrieval) when the
+verdict is not high, and the final decision — a grounded answer or a refusal
+with a rephrase suggestion.
 
 Run from the repo root:
     uv run python -m demo_crag "giải thích bảng băm là gì?"
 
-Requires OPENROUTER_API_KEY in .env (see README.md) and the local-GPU
-dependencies (torch, transformers).
+Requires OPENROUTER_API_KEY in .env (see README.md).
 """
 
 from __future__ import annotations
@@ -24,14 +23,9 @@ from rag_core.chunking import chunk_dataset
 from rag_core.config import load_config
 from rag_core.embeddings import OpenRouterEmbedder
 from rag_core.generator import OpenRouterGenerator, parse_citations
-from rag_core.index import FINAL_TOP_K, Index, dedupe_by_source
+from rag_core.index import Index
 from rag_core.judge import OpenRouterJudge, OpenRouterQueryRewriter
 from rag_core.models import Chunk
-from rag_core.reranker import (
-    RERANK_INPUT_TOP_K,
-    RERANK_KEEP_TOP_K,
-    LocalBgeReranker,
-)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -61,10 +55,6 @@ def main(argv: list[str] | None = None) -> None:
     index = Index(chunks, embedder)
     print(f"  index chunks embedded in a single batched request ({config.embed_dim}-dim)")
 
-    print("\n== Re-ranking ==")
-    reranker = LocalBgeReranker(model_name=config.rerank_model)
-    print(f"  reranker: {reranker.model_name} on {reranker.device}")
-
     judge = OpenRouterJudge(
         api_key=config.api_key,
         model=config.llm_model,
@@ -82,9 +72,7 @@ def main(argv: list[str] | None = None) -> None:
 
     def retrieve_top_five(q: str) -> list[Chunk]:
         vector = np.asarray(embedder.embed_query(q), dtype=np.float32)
-        fused = index.fused_candidates(q, vector, RERANK_INPUT_TOP_K)
-        reranked = reranker.rerank(q, fused)
-        return dedupe_by_source(reranked[:RERANK_KEEP_TOP_K], FINAL_TOP_K)
+        return index.retrieve(q, vector)
 
     top_five = retrieve_top_five(query)
     print("  top-5 Sources:")

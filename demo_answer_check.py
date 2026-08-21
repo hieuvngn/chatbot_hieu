@@ -9,8 +9,7 @@ with its Citations or a refusal with a rephrase suggestion.
 Run from the repo root:
     uv run python -m demo_answer_check "giải thích bảng băm là gì?"
 
-Requires OPENROUTER_API_KEY in .env (see README.md) and the local-GPU
-dependencies (torch, transformers).
+Requires OPENROUTER_API_KEY in .env (see README.md).
 """
 
 from __future__ import annotations
@@ -26,14 +25,9 @@ from rag_core.chunking import chunk_dataset
 from rag_core.config import load_config
 from rag_core.embeddings import OpenRouterEmbedder
 from rag_core.generator import OpenRouterGenerator, parse_citations
-from rag_core.index import FINAL_TOP_K, Index, dedupe_by_source
+from rag_core.index import Index
 from rag_core.judge import DEFAULT_REPHRASE_SUGGESTION
 from rag_core.models import Chunk
-from rag_core.reranker import (
-    RERANK_INPUT_TOP_K,
-    RERANK_KEEP_TOP_K,
-    LocalBgeReranker,
-)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -63,10 +57,6 @@ def main(argv: list[str] | None = None) -> None:
     index = Index(chunks, embedder)
     print(f"  index chunks embedded in a single batched request ({config.embed_dim}-dim)")
 
-    print("\n== Re-ranking ==")
-    reranker = LocalBgeReranker(model_name=config.rerank_model)
-    print(f"  reranker: {reranker.model_name} on {reranker.device}")
-
     generator = OpenRouterGenerator(
         api_key=config.api_key,
         model=config.llm_model,
@@ -82,9 +72,7 @@ def main(argv: list[str] | None = None) -> None:
     print("\n== Retrieval ==")
     print(f"  query: {query}")
     vector = np.asarray(embedder.embed_query(query), dtype=np.float32)
-    fused = index.fused_candidates(query, vector, RERANK_INPUT_TOP_K)
-    reranked = reranker.rerank(query, fused)
-    top_five: list[Chunk] = dedupe_by_source(reranked[:RERANK_KEEP_TOP_K], FINAL_TOP_K)
+    top_five: list[Chunk] = index.retrieve(query, vector)
     print("  top-5 Sources:")
     for i, chunk in enumerate(top_five, start=1):
         print(f"    [{i}] {chunk.source.document_id} / {chunk.source.chapter}")

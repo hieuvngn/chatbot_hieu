@@ -8,8 +8,7 @@ standalone question using the last 6 turns before it enters retrieval.
 Run from the repo root:
     uv run python -m demo_memory "còn ví dụ về nó?"
 
-Requires OPENROUTER_API_KEY in .env (see README.md) and the local-GPU
-dependencies (torch, transformers).
+Requires OPENROUTER_API_KEY in .env (see README.md).
 """
 
 from __future__ import annotations
@@ -26,7 +25,6 @@ from rag_core.embeddings import OpenRouterEmbedder
 from rag_core.generator import OpenRouterGenerator
 from rag_core.index import Index
 from rag_core.judge import OpenRouterJudge, OpenRouterQueryRewriter
-from rag_core.reranker import LocalBgeReranker
 from rag_core.rewrite import OpenRouterSessionRewriter
 
 FIRST_QUESTION = "giải thích bảng băm là gì?"
@@ -72,10 +70,6 @@ def main(argv: list[str] | None = None) -> None:
     index = Index(chunks, embedder)
     print(f"  index chunks embedded in a single batched request ({config.embed_dim}-dim)")
 
-    print("\n== Re-ranking ==")
-    reranker = LocalBgeReranker(model_name=config.rerank_model)
-    print(f"  reranker: {reranker.model_name} on {reranker.device}")
-
     core = RagCore(
         data_dir=config.data_dir,
         embedder=embedder,
@@ -85,7 +79,6 @@ def main(argv: list[str] | None = None) -> None:
             base_url=config.base_url,
         ),
         index=index,
-        reranker=reranker,
         judge=OpenRouterJudge(
             api_key=config.api_key,
             model=config.llm_model,

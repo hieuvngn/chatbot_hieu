@@ -4,23 +4,21 @@ Computes the numbers for the report over a hand-made bilingual set of
 ~20 question/ground-truth pairs (see eval_set.json):
 
 - retrieval hit rate @5: was the ground-truth Source (document + chapter)
-  among the top-5 Sources retrieved for the question, on the naive path
-  (RRF top-5) and on the full path (re-rank + dedupe)? Hit rate is measured
-  on the question as asked, before any CRAG refine.
+  among the top-5 Sources retrieved for the question (RRF top-5).
+  Hit rate is measured on the question as asked, before any CRAG refine.
 - citation precision: of the Citations the generated answer returned, how
   many point at the ground-truth Source? Answers the pipeline refused carry
   no Citations and are excluded from the precision mean (reported separately
   as refusals), so policy-correct refusals never penalize precision.
 
 The summary table side by side is the regression check that the quality
-layers (re-ranking, judge, answer check) help.
+layers (judge, answer check) help.
 
 Run from the repo root:
     uv run python -m eval                    # full eval (LLM generation)
     uv run python -m eval --retrieval-only   # hit rate only, no LLM calls
 
-Requires OPENROUTER_API_KEY in .env (see README.md) and the local-GPU
-dependencies (torch, transformers) for the re-ranker.
+Requires OPENROUTER_API_KEY in .env (see README.md).
 """
 
 from __future__ import annotations
@@ -40,15 +38,9 @@ from rag_core.chunking import chunk_dataset
 from rag_core.config import load_config
 from rag_core.embeddings import OpenRouterEmbedder
 from rag_core.generator import OpenRouterGenerator
-from rag_core.index import FINAL_TOP_K, Index, dedupe_by_source
+from rag_core.index import Index
 from rag_core.judge import OpenRouterJudge, OpenRouterQueryRewriter
 from rag_core.models import AnswerResult, Citation, Source
-from rag_core.reranker import (
-    RERANK_INPUT_TOP_K,
-    RERANK_KEEP_TOP_K,
-    LocalBgeReranker,
-    Reranker,
-)
 from rag_core.rewrite import OpenRouterSessionRewriter
 
 DEFAULT_EVAL_SET = Path(__file__).parent / "eval_set.json"
@@ -207,19 +199,11 @@ def format_summary(summary: EvalSummary) -> str:
 
 def retrieve_sources(
     index: Index,
-    reranker: Reranker | None,
     query: str,
     query_vector: np.ndarray,
 ) -> list[Source]:
-    """The top-5 Sources the pipeline would answer from, naive or re-ranked."""
-    if reranker is None:
-        return [chunk.source for chunk in index.retrieve(query, query_vector)]
-    fused = index.fused_candidates(query, query_vector, RERANK_INPUT_TOP_K)
-    reranked = reranker.rerank(query, fused)
-    return [
-        chunk.source
-        for chunk in dedupe_by_source(reranked[:RERANK_KEEP_TOP_K], FINAL_TOP_K)
-    ]
+    """The top-5 Sources the pipeline would answer from (RRF retrieval)."""
+    return [chunk.source for chunk in index.retrieve(query, query_vector)]
 
 
 def _empty_session() -> Session:
@@ -229,7 +213,6 @@ def _empty_session() -> Session:
 def run_eval(
     items: list[EvalItem],
     index: Index,
-    reranker: Reranker | None,
     core_naive: RagCore,
     core_full: RagCore,
     embedder: OpenRouterEmbedder,
@@ -239,8 +222,8 @@ def run_eval(
     for item in items:
         query = item.question
         vector = np.asarray(embedder.embed_query(query), dtype=np.float32)
-        hit_naive = is_hit(retrieve_sources(index, None, query, vector), item.ground_truth)
-        hit_full = is_hit(retrieve_sources(index, reranker, query, vector), item.ground_truth)
+        hit_naive = is_hit(retrieve_sources(index, query, vector), item.ground_truth)
+        hit_full = is_hit(retrieve_sources(index, query, vector), item.ground_truth)
         precision_naive: float | None = None
         precision_full: float | None = None
         refused_full = False
@@ -320,10 +303,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     index = Index(chunks, embedder)
     print(f"  index chunks embedded in a single batched request ({config.embed_dim}-dim)")
 
-    print("\n== Re-ranking ==")
-    reranker = LocalBgeReranker(model_name=config.rerank_model)
-    print(f"  reranker: {reranker.model_name} on {reranker.device}")
-
     generator = OpenRouterGenerator(
         api_key=config.api_key,
         model=config.llm_model,
@@ -340,7 +319,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         embedder=embedder,
         generator=generator,
         index=index,
-        reranker=reranker,
         judge=OpenRouterJudge(
             api_key=config.api_key,
             model=config.llm_model,
@@ -371,7 +349,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     rows, summary = run_eval(
         items,
         index,
-        reranker,
         core_naive,
         core_full,
         embedder,

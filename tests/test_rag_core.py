@@ -7,10 +7,8 @@ from pathlib import Path
 import generate_data as gd
 from rag_core import RagCore, Session
 from rag_core.answer_check import CheckVerdict, DEFAULT_UNSUPPORTED_FEEDBACK
-from rag_core.index import FINAL_TOP_K, dedupe_by_source
 from rag_core.judge import Judgment, Level
 from rag_core.models import Chunk, Source, Turn
-from rag_core.reranker import RERANK_KEEP_TOP_K
 
 SEED = 42
 DIM = 64
@@ -89,21 +87,6 @@ class FakeGenerator:
         return f"Trả lời về {sources[0].document_title}: {first_sentence}. [1]"
 
 
-class FakeReranker:
-    """Records the candidates it was asked to score and the order it returned."""
-
-    def __init__(self, reverse: bool = False) -> None:
-        self.reverse = reverse
-        self.calls: list[tuple[str, list[Chunk]]] = []
-        self.outputs: list[list[Chunk]] = []
-
-    def rerank(self, query: str, chunks: list[Chunk]) -> list[Chunk]:
-        self.calls.append((query, chunks))
-        output = list(reversed(chunks)) if self.reverse else chunks
-        self.outputs.append(output)
-        return output
-
-
 class FakeJudge:
     """Returns verdicts from a script; records every call."""
 
@@ -160,7 +143,6 @@ def _content_tokens(text: str) -> list[str]:
 
 def make_core(tmp_path: Path, embedder: RecordingEmbedder | None = None,
               generator: FakeGenerator | None = None,
-              reranker: FakeReranker | None = None,
               judge: FakeJudge | None = None,
               rewriter: FakeRewriter | None = None,
               checker: FakeChecker | None = None,
@@ -171,7 +153,6 @@ def make_core(tmp_path: Path, embedder: RecordingEmbedder | None = None,
         data_dir=tmp_path,
         embedder=embedder or RecordingEmbedder(),
         generator=generator or FakeGenerator(),
-        reranker=reranker or FakeReranker(),
         judge=judge,
         rewriter=rewriter,
         checker=checker,
@@ -309,56 +290,6 @@ def test_single_chunk_per_chapter_maps_metadata(tmp_path: Path) -> None:
     assert result.sources[0].course_code == doc.course_code
     assert result.sources[0].kind == doc.kind
     assert result.sources[0].language == doc.language
-
-
-def test_reranker_scores_fused_top_twenty_candidates(tmp_path: Path) -> None:
-    reranker = FakeReranker(reverse=True)
-    core, _ = make_core(tmp_path, reranker=reranker)
-    query = "giải thích bảng băm là gì?"
-
-    core.answer(query, session())
-
-    assert len(reranker.calls) == 1
-    called_query, candidates = reranker.calls[0]
-    assert called_query == query
-    assert len(candidates) == 20, "the reranker must score the fused top-20 candidates"
-
-
-def test_generation_uses_top_five_after_reranking(tmp_path: Path) -> None:
-    generator = FakeGenerator()
-    reranker = FakeReranker(reverse=True)
-    core, _ = make_core(tmp_path, generator=generator, reranker=reranker)
-
-    core.answer("giải thích bảng băm là gì?", session())
-
-    reranked = reranker.outputs[0]
-    expected = [
-        c.source for c in dedupe_by_source(reranked[:RERANK_KEEP_TOP_K], FINAL_TOP_K)
-    ]
-    question, sources = generator.calls[0]
-    assert question == "giải thích bảng băm là gì?"
-    assert sources == expected, (
-        "generation must receive the re-ranked top-5 sources, "
-        "not the raw RRF top-5"
-    )
-
-
-def test_answer_without_reranker_uses_rrf_top_five(tmp_path: Path) -> None:
-    naive = make_core(tmp_path, reranker=None)[0]
-    reranked = make_core(tmp_path, reranker=FakeReranker())[0]
-    query = "giải thích bảng băm là gì?"
-
-    naive_result = naive.answer(query, session())
-    reranked_result = reranked.answer(query, session())
-
-    assert naive_result.answer
-    assert len(naive_result.sources) == 5, (
-        "the naive path must dedupe over the full fused ranking, "
-        "not just the fused top-5 window"
-    )
-    assert [(s.document_id, s.chapter) for s in naive_result.sources] == [
-        (s.document_id, s.chapter) for s in reranked_result.sources
-    ], "without a reranker, answer() falls back to the raw RRF top-5"
 
 
 def test_high_judgment_answers_without_refine(tmp_path: Path) -> None:
