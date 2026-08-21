@@ -50,5 +50,5 @@ def test_extractor_defaults_on_failure():
         inst.chat.completions.create.return_value = _mock_resp('oops')
         ext = OpenRouterCourseExtractor(api_key="fake")
         e = ext.extract("bad")
-        assert e == e  # == Extraction([], None, None)
+        assert e == Extraction(completed_courses=[], target_course=None, current_semester=None)
         assert e.completed_courses == []

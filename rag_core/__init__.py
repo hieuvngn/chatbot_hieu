@@ -212,14 +212,14 @@ class RagCore:
                 msg = header + "\n" + "\n".join(lines)
                 if invalid:
                     msg += f"\nLưu ý: bỏ qua mã không hợp lệ: {', '.join(invalid)} (Không tìm thấy trong catalog)"
-                if ext.current_semester:
+                if ext.current_semester is not None and 1 <= ext.current_semester <= 8:
                     msg += f"\n(Đã lọc kỳ >= {ext.current_semester})"
             else:
                 header = f"With completed [{', '.join(sorted(valid_completed)) or 'empty'}], you are eligible for:"
                 msg = header + "\n" + "\n".join(lines)
                 if invalid:
                     msg += f"\nNote: ignored invalid codes: {', '.join(invalid)} (not found in catalog)"
-                if ext.current_semester:
+                if ext.current_semester is not None and 1 <= ext.current_semester <= 8:
                     msg += f"\n(Filtered semester >= {ext.current_semester})"
             return AnswerResult(answer=msg, citations=[], sources=[], refused=False)
 
@@ -238,28 +238,6 @@ class RagCore:
                 "'I completed CS101, what next?' or 'Explain hash tables'."
             )
         return AnswerResult(answer=msg, citations=[], sources=[], refused=False)
-
-    def _render_eligible(self, completed: set[str], current_semester: int | None) -> str:
-        assert self._advisor is not None
-        nxt = self._advisor.get_next_courses(completed, current_semester)
-        lines = [
-            f"- {c.code} {c.name} ({c.name_en}), kỳ {c.semester}, {c.credits} TC, prereq: {', '.join(c.prerequisites) or 'không có'}"
-            for c in nxt[:10]
-        ]
-        header = f"Với các môn đã hoàn thành [{', '.join(sorted(completed)) or 'rỗng'}], bạn đủ điều kiện học:"
-        return header + "\n" + "\n".join(lines) if lines else header + " rỗng"
-
-    def _render_eligibility_check(self, target: str, completed: set[str]) -> str:
-        assert self._advisor is not None
-        course = self._advisor.get_course(target)
-        if course is None:
-            return f"Không tìm thấy môn '{target}' trong danh mục 50 môn."
-        missing = self._advisor.get_missing_prerequisites(target, completed)
-        if missing is None:
-            return f"Không tìm thấy môn '{target}' trong danh mục 50 môn."
-        if not missing:
-            return f"Bạn đủ điều kiện học {course.code} ({course.name})."
-        return f"Bạn chưa đủ điều kiện học {course.code} ({course.name}). Thiếu: {', '.join(missing)}."
 
     def _is_acceptable(self, judgment: Judgment) -> bool:
         if judgment.is_high:
