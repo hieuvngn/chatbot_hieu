@@ -129,6 +129,8 @@ def render_turn(turn: Turn) -> None:
             st.info("No relevant material was found in the course corpus — answer based on general knowledge (no citations).")
         st.write(turn.text)
         render_citations(turn.citations)
+        if turn.skills_applied:
+            st.caption("🧩 Skills: " + ", ".join(turn.skills_applied))
 
 
 def result_to_turn(result: AnswerResult) -> Turn:
@@ -294,7 +296,15 @@ def render_chat(user: User) -> None:
             st.write(prompt)
         with st.spinner("Retrieving material and composing the answer..."):
             result = get_core().answer(prompt, session)
-        db.append_exchange(session_id, prompt, result.answer, citations=result.citations, refused=result.refused, rephrase_suggestion=result.rephrase_suggestion)
+        db.append_exchange(
+            session_id,
+            prompt,
+            result.answer,
+            citations=result.citations,
+            refused=result.refused,
+            rephrase_suggestion=result.rephrase_suggestion,
+            skills_applied=result.skills_applied,
+        )
         st.rerun()
 
 
