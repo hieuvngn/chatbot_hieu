@@ -416,3 +416,64 @@ def test_clear_all_cascades_attachments(tmp_path: Path) -> None:
     _insert_attachment_row(db_path, conv.id)
     db.clear_all_conversations(user.id)
     assert _attachment_count(db_path) == 0
+
+
+def test_skills_applied_roundtrip(tmp_path: Path) -> None:
+    db = make_db(tmp_path)
+    user = db.register("hieu", "pw")
+    session = db.get_or_create_session(user.id)
+    db.append_exchange(session.id, "q", "a", skills_applied=["eli5", "exam-prep"])
+    resumed = db.get_session(session.id)
+    assert resumed.turns[0].skills_applied == []
+    assert resumed.turns[1].skills_applied == ["eli5", "exam-prep"]
+
+
+def test_default_is_no_skills(tmp_path: Path) -> None:
+    db = make_db(tmp_path)
+    user = db.register("hieu", "pw")
+    session = db.get_or_create_session(user.id)
+    db.append_exchange(session.id, "hello", "world")
+    assert db.get_session(session.id).turns[1].skills_applied == []
+
+
+def test_legacy_db_migrates_skills_applied_column(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            display_name TEXT NOT NULL DEFAULT '',
+            language TEXT NOT NULL DEFAULT 'vi',
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE conversations (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            title TEXT NOT NULL DEFAULT 'New chat',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL REFERENCES conversations(id),
+            role TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            citations TEXT,
+            refused INTEGER NOT NULL DEFAULT 0,
+            rephrase_suggestion TEXT NOT NULL DEFAULT ''
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(path)
+    user = db.register("hieu", "pw")
+    session = db.get_or_create_session(user.id)
+    db.append_exchange(session.id, "q", "a", skills_applied=["eli5"])
+
+    assert db.get_session(session.id).turns[1].skills_applied == ["eli5"]

@@ -95,7 +95,8 @@ class Database:
                 created_at TEXT NOT NULL,
                 citations TEXT,
                 refused INTEGER NOT NULL DEFAULT 0,
-                rephrase_suggestion TEXT NOT NULL DEFAULT ''
+                rephrase_suggestion TEXT NOT NULL DEFAULT '',
+                skills_applied TEXT NOT NULL DEFAULT ''
             );
             """
         )
@@ -118,6 +119,10 @@ class Database:
             (
                 "rephrase_suggestion",
                 "ALTER TABLE messages ADD COLUMN rephrase_suggestion TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "skills_applied",
+                "ALTER TABLE messages ADD COLUMN skills_applied TEXT NOT NULL DEFAULT ''",
             ),
         ]:
             if column not in columns:
@@ -320,7 +325,7 @@ class Database:
             if conversation is None:
                 raise KeyError(f"no such conversation: {session_id}")
             rows = conn.execute(
-                "SELECT role, text, citations, refused, rephrase_suggestion "
+                "SELECT role, text, citations, refused, rephrase_suggestion, skills_applied "
                 "FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
                 (session_id, MAX_TURNS),
             ).fetchall()
@@ -331,6 +336,7 @@ class Database:
                     citations=self._parse_citations(row["citations"]),
                     refused=bool(row["refused"]),
                     rephrase_suggestion=row["rephrase_suggestion"] or "",
+                    skills_applied=self._parse_skills(row["skills_applied"]),
                 )
                 for row in reversed(rows)
             ]
@@ -344,6 +350,7 @@ class Database:
         citations: list[Citation] | None = None,
         refused: bool = False,
         rephrase_suggestion: str = "",
+        skills_applied: list[str] | None = None,
     ) -> None:
         """Persist one user message and its assistant reply as two turns.
 
@@ -358,12 +365,13 @@ class Database:
             if citations
             else None
         )
+        skills_csv = ",".join(skills_applied) if skills_applied else ""
         with contextlib.closing(self._connect()) as conn:
             conn.executemany(
                 "INSERT INTO messages (conversation_id, role, text, created_at, "
-                "citations, refused, rephrase_suggestion) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "citations, refused, rephrase_suggestion, skills_applied) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (session_id, "user", user_text, self._now(), None, 0, ""),
+                    (session_id, "user", user_text, self._now(), None, 0, "", ""),
                     (
                         session_id,
                         "assistant",
@@ -372,6 +380,7 @@ class Database:
                         citations_json,
                         int(refused),
                         rephrase_suggestion,
+                        skills_csv,
                     ),
                 ],
             )
@@ -408,6 +417,10 @@ class Database:
         if not isinstance(entries, list):
             raise ValueError("citations column must be a JSON list")
         return [_citation_from_dict(entry) for entry in entries]
+
+    @staticmethod
+    def _parse_skills(raw: str | None) -> list[str]:
+        return [part for part in (raw or "").split(",") if part]
 
     @staticmethod
     def _now() -> str:
