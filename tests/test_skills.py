@@ -35,6 +35,23 @@ def test_parse_invalid_returns_none(text: str) -> None:
     assert parse_skill_md(text) is None
 
 
+def test_parse_rejects_comma_in_name() -> None:
+    text = "---\nname: a,b\ndescription: d\n---\nbody"
+    assert parse_skill_md(text) is None
+
+
+def test_load_skills_handles_utf8_bom(tmp_path: Path) -> None:
+    directory = tmp_path / "bommed"
+    directory.mkdir()
+    (directory / "SKILL.md").write_bytes(
+        b"\xef\xbb\xbf---\nname: bom\ndescription: d\n---\nbody\n"
+    )
+
+    skills = load_skills(tmp_path)
+
+    assert [s.name for s in skills] == ["bom"]
+
+
 def write_skill(root: Path, folder: str, text: str) -> None:
     directory = root / folder
     directory.mkdir(parents=True)

@@ -42,7 +42,7 @@ def parse_skill_md(text: str) -> Skill | None:
     name = meta.get("name", "")
     description = meta.get("description", "")
     instructions = "\n".join(lines[end + 1 :]).strip()
-    if not name or not description or not instructions:
+    if not name or not description or not instructions or "," in name:
         return None
     return Skill(name=name, description=description, instructions=instructions)
 
@@ -58,7 +58,7 @@ def load_skills(directory: Path) -> list[Skill]:
     skills: list[Skill] = []
     for path in sorted(directory.glob("*/SKILL.md")):
         try:
-            text = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8-sig")
         except OSError:
             logger.warning("cannot read skill file: %s", path)
             continue
