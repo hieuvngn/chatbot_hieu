@@ -312,6 +312,9 @@ def main() -> None:
     if refreshed:
         st.session_state["user"] = refreshed
         user = refreshed
+    # Resolve the active conversation BEFORE rendering the sidebar so that
+    # render_attachments() does not silently skip its first-render pass.
+    get_active_conversation_id(user, db)
     render_sidebar(user)
     if st.session_state.get("show_profile"):
         render_profile(user)
