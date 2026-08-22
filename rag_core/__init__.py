@@ -41,6 +41,7 @@ from rag_core.models import MAX_TURNS, AnswerResult, Chunk, Session, Source
 from rag_core.rewrite import OpenRouterSessionRewriter, SessionRewriter
 from rag_core.skill_selector import OpenRouterSkillSelector, SkillSelector
 from rag_core.skills import SKILLS_DIR, Skill, load_skills
+from rag_core.web_search import WebSearcher
 
 
 class RagCore:
@@ -68,6 +69,7 @@ class RagCore:
         attachment_store: AttachmentStore | None = None,
         skills: list[Skill] | None = None,
         skill_selector: SkillSelector | None = None,
+        web_searcher: WebSearcher | None = None,
     ) -> None:
         self._embedder = embedder
         self._generator = generator
@@ -90,11 +92,17 @@ class RagCore:
         self._attachment_cache: dict[str, tuple[tuple[str, ...], Index]] = {}
         self._skills: list[Skill] = list(skills) if skills else []
         self._skill_selector = skill_selector
+        self._web_searcher = web_searcher
 
     @property
     def embedder(self) -> Embedder:
         """The shared embedder; the UI's AttachmentStore reuses this instance."""
         return self._embedder
+
+    @property
+    def has_web_search(self) -> bool:
+        """Whether a Firecrawl searcher is wired in; the UI gates its toggle on this."""
+        return self._web_searcher is not None
 
     @staticmethod
     def _build_index(data_dir: Path, embedder: Embedder) -> Index:
@@ -104,18 +112,39 @@ class RagCore:
         return Index(chunks, embedder)
 
     def _retrieve_sources(
-        self, query_text: str, query_vector: np.ndarray, session_id: str | None = None
+        self,
+        query_text: str,
+        query_vector: np.ndarray,
+        session_id: str | None = None,
+        use_web: bool = False,
     ) -> list[Chunk]:
-        """Hybrid retrieval over course KB fused with this session's attachments."""
+        """Hybrid retrieval over course KB fused with attachments and optional web results."""
         kb_ranked = [
             self._index.chunks[i]
             for i in self._index.fused_ranking(query_text, query_vector)
         ]
+        ranked_lists = [kb_ranked]
         if session_id is not None:
             att_ranked = self._attachment_ranking(query_text, query_vector, session_id)
             if att_ranked:
-                kb_ranked = rrf_merge_items([kb_ranked, att_ranked])
-        return dedupe_by_source(kb_ranked, FINAL_TOP_K)
+                ranked_lists.append(att_ranked)
+        if use_web:
+            web_chunks = self._safe_web_search(query_text)
+            if web_chunks:
+                ranked_lists.append(web_chunks)
+        fused = kb_ranked if len(ranked_lists) == 1 else rrf_merge_items(ranked_lists)
+        return dedupe_by_source(fused, FINAL_TOP_K)
+
+    def _safe_web_search(self, query_text: str) -> list[Chunk]:
+        if self._web_searcher is None:
+            return []
+        try:
+            return self._web_searcher.search(query_text)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "web search failed; continuing without web sources", exc_info=True
+            )
+            return []
 
     def _attachment_ranking(
         self, query_text: str, query_vector: np.ndarray, session_id: str
@@ -145,16 +174,25 @@ class RagCore:
             )
             return []
 
-    def answer(self, user_message: str, session: Session) -> AnswerResult:
+    def answer(
+        self, user_message: str, session: Session, use_web: bool = False
+    ) -> AnswerResult:
         query = self._rewrite_for_session(user_message, session)
+        use_web_effective = bool(use_web) and self.has_web_search
         if self._classifier is not None and self._extractor is not None and self._advisor is not None:
             intent = self._classifier.classify(query)
             if intent == "COURSE_ADVISOR":
                 return self._advisor_branch(query)
-            if intent == "OTHER" and not self._session_has_attachments(session.id):
+            if (
+                intent == "OTHER"
+                and not self._session_has_attachments(session.id)
+                and not use_web_effective
+            ):
                 return self._other_result(query)
         query_vector = np.asarray(self._embedder.embed_query(query), dtype=np.float32)
-        retrieved = self._retrieve_sources(query, query_vector, session.id)
+        retrieved = self._retrieve_sources(
+            query, query_vector, session.id, use_web=use_web_effective
+        )
 
         if self._judge is not None and self._rewriter is not None:
             return self._gated_answer(query, retrieved, self._judge, self._rewriter, session.id)
