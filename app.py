@@ -172,8 +172,10 @@ def render_attachments() -> None:
                 f"Đã đạt giới hạn {MAX_FILES_PER_CONVERSATION} tài liệu cho chat này."
             )
             return
+        # Key theo conversation để widget state không mang file sang chat khác.
+        uploader_key = f"att_uploader_{session_id}"
         uploaded = st.file_uploader(
-            "Thêm tài liệu (PDF/TXT/MD)", type=["pdf", "txt", "md"], key="att_uploader"
+            "Thêm tài liệu (PDF/TXT/MD)", type=["pdf", "txt", "md"], key=uploader_key
         )
         if uploaded is not None:
             try:
@@ -185,7 +187,7 @@ def render_attachments() -> None:
                 st.error(str(exc))
             else:
                 st.toast(f"Đã xử lý {meta.filename}: {meta.chunk_count} đoạn.")
-                st.session_state.pop("att_uploader", None)
+                st.session_state.pop(uploader_key, None)
                 st.rerun()
 
 
