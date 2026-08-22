@@ -15,6 +15,16 @@ _SYSTEM_PROMPT = (
     "instead of guessing."
 )
 
+_FALLBACK_SYSTEM_PROMPT = (
+    "You are CourseMate, a helpful study assistant for IT students. "
+    "No relevant study documents were found for the user's question. "
+    "Answer from your general knowledge as helpfully and accurately as possible. "
+    "Do NOT invent citations or fake sources. If you are uncertain, say so. "
+    "Start the answer with a short disclaimer in the user's language: "
+    "'Lưu ý: Không tìm thấy tài liệu phù hợp trong kho tài liệu, câu trả lời dưới đây dựa trên kiến thức chung.' "
+    "for Vietnamese, or 'Note: No relevant material was found in the course corpus, the following answer is based on general knowledge.' for English."
+)
+
 _CITATION_PATTERN = re.compile(r"\[(\d+)\]")
 
 
@@ -28,7 +38,12 @@ def numbered_sources(chunks: list[Chunk]) -> str:
 
 class Generator(Protocol):
     def generate(
-        self, question: str, chunks: list[Chunk], feedback: str | None = None
+        self,
+        question: str,
+        chunks: list[Chunk],
+        feedback: str | None = None,
+        *,
+        skill_instructions: str = "",
     ) -> str: ...
 
 
@@ -45,7 +60,12 @@ class OpenRouterGenerator:
         self._model = model
 
     def generate(
-        self, question: str, chunks: list[Chunk], feedback: str | None = None
+        self,
+        question: str,
+        chunks: list[Chunk],
+        feedback: str | None = None,
+        *,
+        skill_instructions: str = "",
     ) -> str:
         numbered = numbered_sources(chunks)
         user_prompt = (
@@ -58,11 +78,26 @@ class OpenRouterGenerator:
                 "\n\nYour previous answer was rejected. "
                 f"Feedback: {feedback}"
             )
+        system_prompt = _SYSTEM_PROMPT
+        if skill_instructions:
+            system_prompt += (
+                "\n\nAdditional instructions from active skills:\n" + skill_instructions
+            )
         response = self._client.chat.completions.create(
             model=self._model,
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
+            ],
+        )
+        return response.choices[0].message.content or ""
+
+    def generate_fallback(self, question: str) -> str:
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": _FALLBACK_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Question: {question}"},
             ],
         )
         return response.choices[0].message.content or ""

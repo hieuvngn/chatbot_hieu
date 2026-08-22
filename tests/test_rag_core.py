@@ -81,13 +81,20 @@ class FakeGenerator:
     def __init__(self) -> None:
         self.calls: list[tuple[str, list[Source]]] = []
         self.feedbacks: list[str | None] = []
+        self.skill_prompts: list[str] = []
 
     def generate(
-        self, question: str, chunks: list[Chunk], feedback: str | None = None
+        self,
+        question: str,
+        chunks: list[Chunk],
+        feedback: str | None = None,
+        *,
+        skill_instructions: str = "",
     ) -> str:
         sources = [chunk.source for chunk in chunks]
         self.calls.append((question, sources))
         self.feedbacks.append(feedback)
+        self.skill_prompts.append(skill_instructions)
         first_sentence = chunks[0].text.split(".")[0]
         return f"Trả lời về {sources[0].document_title}: {first_sentence}. [1]"
 

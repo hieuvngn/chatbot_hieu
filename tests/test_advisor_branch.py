@@ -16,7 +16,8 @@ class DummyEmbedder:
     def embed_query(self, q): return [0.0]*8
 
 class DummyGenerator:
-    def generate(self, q, chunks, feedback=None): return "dummy RAG answer [1]"
+    def generate(self, q, chunks, feedback=None, *, skill_instructions=""):
+        return "dummy RAG answer [1]"
 
 DATA_DIR = Path("data")
 SESSION = Session(id="s1", user_id="u1", turns=[])
