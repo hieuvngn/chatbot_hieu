@@ -10,6 +10,7 @@ import generate_data as gd
 from rag_core import RagCore, Session
 from rag_core.attachments import AttachmentStore
 from rag_core.db import Database
+from rag_core.intent import Extraction, Intent
 from rag_core.answer_check import CheckVerdict, DEFAULT_UNSUPPORTED_FEEDBACK
 from rag_core.judge import Judgment, Level
 from rag_core.models import Chunk, Source, Turn
@@ -722,3 +723,59 @@ def test_refine_pass_also_searches_attachments(tmp_path: Path) -> None:
     result = core.answer("câu hỏi mơ hồ", Session(id="sess-upload", user_id="u1"))
 
     assert any(s.kind == "upload" for s in result.sources)
+
+class OtherClassifier:
+    """Always misclassifies as OTHER — worst-case classifier."""
+
+    def classify(self, query: str) -> Intent:
+        return "OTHER"
+
+
+class NoopExtractor:
+    def extract(self, query: str) -> Extraction:
+        return Extraction(completed_courses=[], target_course=None, current_semester=None)
+
+
+def make_other_intent_core_with_attachment(tmp_path: Path) -> RagCore:
+    ds = gd.generate(seed=SEED)
+    gd.write(ds, tmp_path)
+    embedder = RecordingEmbedder()
+    Database(tmp_path / "test.db")
+    store = AttachmentStore(tmp_path / "test.db", embedder)
+    store.add("sess-other", "tailieu.txt", UPLOAD_TOKENS.encode())
+    return RagCore(
+        data_dir=tmp_path,
+        embedder=embedder,
+        generator=FakeGenerator(),
+        judge=FakeJudge(levels=["high"]),
+        classifier=OtherClassifier(),
+        extractor=NoopExtractor(),
+        attachment_store=store,
+    )
+
+
+def test_other_intent_with_attachments_still_retrieves(tmp_path: Path) -> None:
+    core = make_other_intent_core_with_attachment(tmp_path)
+
+    result = core.answer(
+        f"giải thích {UPLOAD_TOKENS}", Session(id="sess-other", user_id="u1")
+    )
+
+    assert any(s.kind == "upload" for s in result.sources)
+    assert "Tôi chỉ hỗ trợ" not in result.answer
+
+
+def test_other_intent_without_attachments_still_refuses(tmp_path: Path) -> None:
+    ds = gd.generate(seed=SEED)
+    gd.write(ds, tmp_path)
+    core = RagCore(
+        data_dir=tmp_path,
+        embedder=RecordingEmbedder(),
+        generator=FakeGenerator(),
+        classifier=OtherClassifier(),
+        extractor=NoopExtractor(),
+    )
+
+    result = core.answer("thời tiết hôm nay thế nào", session())
+
+    assert "Tôi chỉ hỗ trợ" in result.answer or "I only support" in result.answer

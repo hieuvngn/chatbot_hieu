@@ -145,7 +145,7 @@ class RagCore:
             intent = self._classifier.classify(query)
             if intent == "COURSE_ADVISOR":
                 return self._advisor_branch(query)
-            if intent == "OTHER":
+            if intent == "OTHER" and not self._session_has_attachments(session.id):
                 return self._other_result(query)
         query_vector = np.asarray(self._embedder.embed_query(query), dtype=np.float32)
         retrieved = self._retrieve_sources(query, query_vector, session.id)
@@ -159,6 +159,20 @@ class RagCore:
             return message
         history = session.turns[-MAX_TURNS:]
         return self._session_rewriter.rewrite(message, history)
+
+    def _session_has_attachments(self, session_id: str) -> bool:
+        """Whether this conversation has uploaded documents.
+
+        Uploaded material is out-of-domain for the intent classifier, so a
+        conversation with attachments never takes the OTHER hard refusal —
+        the question falls through to retrieval (KB + attachments).
+        """
+        if self._attachments is None:
+            return False
+        try:
+            return bool(self._attachments.identity(session_id))
+        except Exception:
+            return False
 
     def _is_vi(self, query: str) -> bool:
         # Deterministic Vietnamese detection: char range or diacritic letters or keywords
