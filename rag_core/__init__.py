@@ -39,6 +39,8 @@ from rag_core.judge import (
 )
 from rag_core.models import MAX_TURNS, AnswerResult, Chunk, Session, Source
 from rag_core.rewrite import OpenRouterSessionRewriter, SessionRewriter
+from rag_core.skill_selector import OpenRouterSkillSelector, SkillSelector
+from rag_core.skills import SKILLS_DIR, Skill, load_skills
 
 
 class RagCore:
@@ -64,6 +66,8 @@ class RagCore:
         allow_medium: bool = False,
         enable_fallback: bool = False,
         attachment_store: AttachmentStore | None = None,
+        skills: list[Skill] | None = None,
+        skill_selector: SkillSelector | None = None,
     ) -> None:
         self._embedder = embedder
         self._generator = generator
@@ -84,6 +88,8 @@ class RagCore:
         self._index = index or self._build_index(data_dir, embedder)
         self._attachments = attachment_store
         self._attachment_cache: dict[str, tuple[tuple[str, ...], Index]] = {}
+        self._skills: list[Skill] = list(skills) if skills else []
+        self._skill_selector = skill_selector
 
     @property
     def embedder(self) -> Embedder:
@@ -355,27 +361,60 @@ class RagCore:
             return self._refused_result(DEFAULT_REPHRASE_SUGGESTION)
         return AnswerResult(answer=fallback_text, citations=[], sources=[], refused=False)
 
+    def _select_skills(self, query: str) -> list[str]:
+        """Hỏi selector skill nào áp dụng; lỗi bất kỳ → chạy như không có skill."""
+        if not self._skills or self._skill_selector is None:
+            return []
+        try:
+            picked = self._skill_selector.select(query, self._skills)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "skill selection failed; continuing without skills", exc_info=True
+            )
+            return []
+        known = {skill.name for skill in self._skills}
+        return [name for name in picked if name in known]
+
+    def _skill_instructions(self, names: list[str]) -> str:
+        by_name = {skill.name: skill for skill in self._skills}
+        return "\n\n".join(by_name[n].instructions for n in names if n in by_name)
+
     def _generate_result(self, question: str, chunks: list[Chunk]) -> AnswerResult:
+        skills_applied = self._select_skills(question)
+        skill_instructions = self._skill_instructions(skills_applied)
         sources = [chunk.source for chunk in chunks]
-        answer_text = self._generator.generate(question, chunks)
+        answer_text = self._generator.generate(
+            question, chunks, skill_instructions=skill_instructions
+        )
         if self._checker is None:
-            return self._answer_result(answer_text, sources)
+            return self._answer_result(answer_text, sources, skills_applied)
         verdict = self._checker.check(question, answer_text, chunks)
         if verdict.supported:
-            return self._answer_result(answer_text, sources)
+            return self._answer_result(answer_text, sources, skills_applied)
         feedback = verdict.feedback or DEFAULT_UNSUPPORTED_FEEDBACK
-        regenerated = self._generator.generate(question, chunks, feedback=feedback)
+        regenerated = self._generator.generate(
+            question, chunks, feedback=feedback, skill_instructions=skill_instructions
+        )
         verdict = self._checker.check(question, regenerated, chunks)
         if verdict.supported:
-            return self._answer_result(regenerated, sources)
+            return self._answer_result(regenerated, sources, skills_applied)
         if self._enable_fallback:
             return self._fallback_result(question)
         return self._refused_result(DEFAULT_REPHRASE_SUGGESTION)
 
     @staticmethod
-    def _answer_result(answer_text: str, sources: list[Source]) -> AnswerResult:
+    def _answer_result(
+        answer_text: str,
+        sources: list[Source],
+        skills_applied: list[str] | None = None,
+    ) -> AnswerResult:
         citations = parse_citations(answer_text, sources)
-        return AnswerResult(answer=answer_text, citations=citations, sources=sources)
+        return AnswerResult(
+            answer=answer_text,
+            citations=citations,
+            sources=sources,
+            skills_applied=skills_applied or [],
+        )
 
     @staticmethod
     def _refused_result(rephrase_suggestion: str) -> AnswerResult:
@@ -434,6 +473,14 @@ def build_rag_core(config: Config | None = None) -> RagCore:
         base_url=config.base_url,
     )
     attachment_store = AttachmentStore(config.data_dir / APP_DB_FILENAME, embedder)
+    skills = load_skills(SKILLS_DIR)
+    skill_selector = (
+        OpenRouterSkillSelector(
+            api_key=config.api_key, model=config.llm_model, base_url=config.base_url
+        )
+        if skills
+        else None
+    )
     return RagCore(
         config.data_dir,
         embedder,
@@ -448,6 +495,8 @@ def build_rag_core(config: Config | None = None) -> RagCore:
         allow_medium=config.allow_medium,
         enable_fallback=config.enable_fallback,
         attachment_store=attachment_store,
+        skills=skills,
+        skill_selector=skill_selector,
     )
 
 
@@ -476,4 +525,7 @@ __all__ = [
     "Extraction",
     "OpenRouterIntentClassifier",
     "OpenRouterCourseExtractor",
+    "Skill",
+    "SkillSelector",
+    "load_skills",
 ]

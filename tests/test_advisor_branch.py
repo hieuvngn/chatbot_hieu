@@ -1,15 +1,20 @@
 from pathlib import Path
 from rag_core import RagCore, Session
 from rag_core.course_advisor import CourseAdvisor
-from rag_core.intent import Extraction
+from rag_core.intent import Extraction, Intent
+from rag_core.skills import Skill
 
 class FakeClassifier:
-    def __init__(self, intent): self.intent = intent
-    def classify(self, q): return self.intent
+    def __init__(self, intent: Intent) -> None:
+        self.intent = intent
+    def classify(self, q: str) -> Intent:
+        return self.intent
 
 class FakeExtractor:
-    def __init__(self, ext): self.ext = ext
-    def extract(self, q): return self.ext
+    def __init__(self, ext: Extraction) -> None:
+        self.ext = ext
+    def extract(self, q: str) -> Extraction:
+        return self.ext
 
 class DummyEmbedder:
     def embed_batch(self, texts): return [[0.0]*8 for _ in texts]
@@ -64,3 +69,52 @@ def test_other_returns_guidance():
     core = _core("OTHER", Extraction([], None, None))
     res = core.answer("Thời tiết hôm nay?", SESSION)
     assert "tư vấn môn học" in res.answer.lower() or "course" in res.answer.lower()
+
+
+SKILLS = [Skill(name="eli5", description="d", instructions="Use simple words.")]
+
+
+class SpySelector:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def select(self, query: str, skills: list[Skill]) -> list[str]:
+        self.calls += 1
+        return ["eli5"]
+
+
+def test_advisor_branch_does_not_call_selector() -> None:
+    selector = SpySelector()
+    core = RagCore(
+        data_dir=DATA_DIR,
+        embedder=DummyEmbedder(),
+        generator=DummyGenerator(),
+        classifier=FakeClassifier("COURSE_ADVISOR"),
+        extractor=FakeExtractor(Extraction([], None, None)),
+        advisor=CourseAdvisor(DATA_DIR),
+        skills=SKILLS,
+        skill_selector=selector,
+    )
+
+    core.answer("Tôi đã học CS101, học gì tiếp?", SESSION)
+
+    assert selector.calls == 0
+
+
+def test_knowledge_qa_marks_skills_applied() -> None:
+    selector = SpySelector()
+    core = RagCore(
+        data_dir=DATA_DIR,
+        embedder=DummyEmbedder(),
+        generator=DummyGenerator(),
+        classifier=FakeClassifier("KNOWLEDGE_QA"),
+        extractor=FakeExtractor(Extraction([], None, None)),
+        advisor=CourseAdvisor(DATA_DIR),
+        skills=SKILLS,
+        skill_selector=selector,
+    )
+
+    res = core.answer("Giải thích bảng băm là gì?", SESSION)
+
+    assert selector.calls == 1
+    assert res.skills_applied == ["eli5"]

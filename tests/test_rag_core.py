@@ -14,6 +14,8 @@ from rag_core.intent import Extraction, Intent
 from rag_core.answer_check import CheckVerdict, DEFAULT_UNSUPPORTED_FEEDBACK
 from rag_core.judge import Judgment, Level
 from rag_core.models import Chunk, Source, Turn
+from rag_core.skill_selector import SkillSelector
+from rag_core.skills import Skill
 
 SEED = 42
 DIM = 64
@@ -158,7 +160,9 @@ def make_core(tmp_path: Path, embedder: RecordingEmbedder | None = None,
               judge: FakeJudge | None = None,
               rewriter: FakeRewriter | None = None,
               checker: FakeChecker | None = None,
-              session_rewriter: FakeSessionRewriter | None = None) -> tuple[RagCore, gd.Dataset]:
+              session_rewriter: FakeSessionRewriter | None = None,
+              skills: list[Skill] | None = None,
+              skill_selector: SkillSelector | None = None) -> tuple[RagCore, gd.Dataset]:
     ds = gd.generate(seed=SEED)
     gd.write(ds, tmp_path)
     core = RagCore(
@@ -169,6 +173,8 @@ def make_core(tmp_path: Path, embedder: RecordingEmbedder | None = None,
         rewriter=rewriter,
         checker=checker,
         session_rewriter=session_rewriter,
+        skills=skills,
+        skill_selector=skill_selector,
     )
     return core, ds
 
@@ -786,3 +792,119 @@ def test_other_intent_without_attachments_still_refuses(tmp_path: Path) -> None:
     result = core.answer("thời tiết hôm nay thế nào", session())
 
     assert "Tôi chỉ hỗ trợ" in result.answer or "I only support" in result.answer
+
+
+class FakeSkillSelector:
+    """Returns scripted names; records calls; optionally always raises."""
+
+    def __init__(self, names: list[str] | None = None, fail: bool = False) -> None:
+        self.names = names
+        self.fail = fail
+        self.calls: list[tuple[str, list[Skill]]] = []
+
+    def select(self, query: str, skills: list[Skill]) -> list[str]:
+        if self.fail:
+            raise RuntimeError("selector down")
+        self.calls.append((query, list(skills)))
+        return list(self.names or [])
+
+
+TEST_SKILLS: list[Skill] = [
+    Skill(name="eli5", description="Explain simply", instructions="USE SIMPLE WORDS."),
+    Skill(
+        name="exam-prep", description="Exam style answers", instructions="END WITH PRACTICE QUESTIONS."
+    ),
+]
+
+
+def test_selected_skill_instructions_reach_generator(tmp_path: Path) -> None:
+    generator = FakeGenerator()
+    core, _ = make_core(
+        tmp_path,
+        generator=generator,
+        skills=TEST_SKILLS,
+        skill_selector=FakeSkillSelector(["eli5"]),
+    )
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert result.skills_applied == ["eli5"]
+    assert generator.skill_prompts == ["USE SIMPLE WORDS."]
+
+
+def test_regeneration_reuses_same_skill_instructions(tmp_path: Path) -> None:
+    checker = FakeChecker(
+        verdicts=[
+            CheckVerdict(supported=False, feedback="claim unsupported"),
+            CheckVerdict(supported=True),
+        ]
+    )
+    generator = FakeGenerator()
+    core, _ = make_core(
+        tmp_path,
+        generator=generator,
+        checker=checker,
+        skills=TEST_SKILLS,
+        skill_selector=FakeSkillSelector(["eli5", "exam-prep"]),
+    )
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert result.skills_applied == ["eli5", "exam-prep"]
+    assert generator.skill_prompts == [
+        "USE SIMPLE WORDS.\n\nEND WITH PRACTICE QUESTIONS."
+    ] * 2
+
+
+def test_unknown_skill_names_are_dropped(tmp_path: Path) -> None:
+    core, _ = make_core(
+        tmp_path,
+        generator=FakeGenerator(),
+        skills=TEST_SKILLS,
+        skill_selector=FakeSkillSelector(["ghost", "exam-prep"]),
+    )
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert result.skills_applied == ["exam-prep"]
+
+
+def test_selector_failure_degrades_to_no_skills(tmp_path: Path) -> None:
+    generator = FakeGenerator()
+    core, _ = make_core(
+        tmp_path,
+        generator=generator,
+        skills=TEST_SKILLS,
+        skill_selector=FakeSkillSelector(fail=True),
+    )
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert not result.refused
+    assert result.skills_applied == []
+    assert generator.skill_prompts == [""]
+
+
+def test_without_skills_pipeline_unchanged(tmp_path: Path) -> None:
+    generator = FakeGenerator()
+    core, _ = make_core(tmp_path, generator=generator)
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert result.skills_applied == []
+    assert generator.skill_prompts == [""]
+
+
+def test_refused_result_has_no_skills(tmp_path: Path) -> None:
+    core, _ = make_core(
+        tmp_path,
+        judge=FakeJudge(levels=["low", "low"]),
+        rewriter=FakeRewriter(),
+        skills=TEST_SKILLS,
+        skill_selector=FakeSkillSelector(["eli5"]),
+    )
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert result.refused
+    assert result.skills_applied == []
