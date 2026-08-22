@@ -31,7 +31,9 @@ class OpenRouterEmbedder:
         self.dim = dim
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        response = self._client.embeddings.create(model=self._model, input=texts)
+        response = self._client.embeddings.create(
+            model=self._model, input=texts, encoding_format="float"
+        )
         return [item.embedding for item in response.data]
 
     def embed_query(self, text: str) -> list[float]:

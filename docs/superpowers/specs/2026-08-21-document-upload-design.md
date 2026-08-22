@@ -85,7 +85,7 @@ CREATE INDEX IF NOT EXISTS idx_att_chunks_conv ON attachment_chunks(conversation
 
 | API | Hành vi |
 |---|---|
-| `add(conversation_id, filename, data_bytes)` | validate → parse → chunk → embed → persist. Trả `AttachmentMeta`. Raise `ValueError` khi vi phạm giới hạn/trùng tên, `RuntimeError` khi parse ra text rỗng. |
+| `add(conversation_id, filename, data_bytes)` | validate → parse → chunk → embed → persist. Trả `AttachmentMeta`. Raise `ValueError` cho mọi lỗi người dùng (vi phạm giới hạn, trùng tên, parse ra text rỗng). |
 | `list_for(conversation_id)` | danh sách `AttachmentMeta(filename, file_kind, size_bytes, chunk_count, created_at)` |
 | `delete(attachment_id)` | xóa metadata + chunks |
 | `load_chunks(conversation_id)` | `list[Chunk]` với `Source(kind="upload", chapter=…)` |

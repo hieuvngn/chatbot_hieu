@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"    [{i}] {chunk.source.document_id} / {chunk.source.chapter}")
 
     judgment = judge.assess(query, top_five)
-    print(f"  verdict: {judgment.level}")
+    print(f"  verdict: {judgment.level} (allow_medium={config.allow_medium})")
     if not judgment.is_high:
         refined = rewriter.rewrite(query)
         print(f"  refine: {query} -> {refined}")
@@ -90,9 +90,22 @@ def main(argv: list[str] | None = None) -> None:
             print(f"    [{i}] {chunk.source.document_id} / {chunk.source.chapter}")
         judgment = judge.assess(refined, top_five)
         print(f"  verdict after refine: {judgment.level}")
-        if judgment.is_high:
+        is_acceptable = judgment.is_high or (config.allow_medium and judgment.level == "medium")
+        if is_acceptable:
             query = refined
         else:
+            if config.enable_fallback:
+                print("  -> fallback (no high/medium after refine, answering from general knowledge)")
+                print(f"  fallback query: {refined}")
+                generator = OpenRouterGenerator(
+                    api_key=config.api_key,
+                    model=config.llm_model,
+                    base_url=config.base_url,
+                )
+                fallback = generator.generate_fallback(refined)
+                print(f"  answer (fallback): {fallback}")
+                print("  citations: [] (fallback has no sources)")
+                return
             print(f"  -> refusal: {judgment.rephrase_suggestion}")
             return
 

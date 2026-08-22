@@ -100,6 +100,12 @@ def main(argv: list[str] | None = None) -> None:
         if verdict.supported:
             answer_text = regenerated
         else:
+            if config.enable_fallback:
+                print("  -> fallback (still unsupported after regeneration, answering from general knowledge)")
+                fallback = generator.generate_fallback(query)
+                print(f"  answer (fallback): {fallback}")
+                print("  citations: [] (fallback has no sources)")
+                return
             print(f"  -> refusal: {DEFAULT_REPHRASE_SUGGESTION}")
             return
     else:
