@@ -1,6 +1,6 @@
 # Hướng dẫn cài đặt và chạy CourseMate RAG Chatbot
 
-Tài liệu này hướng dẫn chi tiết từ cài đặt môi trường đến chạy toàn bộ pipeline, demo và UI Streamlit. Tài liệu bám sát mã nguồn hiện tại (pipeline: `hybrid retrieval → CRAG judge → generation → answer check`, không còn re-ranker local).
+Tài liệu này hướng dẫn chi tiết từ cài đặt môi trường đến chạy toàn bộ pipeline, demo và web UI (React + FastAPI). Tài liệu bám sát mã nguồn hiện tại (pipeline: `hybrid retrieval → CRAG judge → generation → answer check`, không còn re-ranker local).
 
 ---
 
@@ -19,7 +19,7 @@ rag_core/__init__.py:RagCore.answer()
    ├─ rag_core/generator.py    : gpt-4o-mini, cite [1],[2]...
    └─ rag_core/answer_check.py : Self-RAG verifier → 1 lần regenerate hoặc refuse
       ↓
-rag_core/db.py (SQLite) + app.py (Streamlit UI)
+rag_core/db.py (SQLite) + server/ (FastAPI API) + web/ (React SPA)
 ```
 
 *Điểm vào duy nhất*: `RagCore.answer(user_message, session) -> AnswerResult` (`rag_core/__init__.py:81`). UI, eval và demo đều gọi qua hàm này.
@@ -37,7 +37,7 @@ rag_core/db.py (SQLite) + app.py (Streamlit UI)
 | Dung lượng | ~500 MB cho `faiss-cpu`, `torch`, `transformers` (nếu cài full deps) |
 | RAM | 4 GB tối thiểu, 8 GB khuyến nghị |
 
-> Lưu ý: Sau khi gỡ `BAAI/bge-reranker-v2-m3`, project **không còn model local bắt buộc**. `torch`/`transformers`/`bitsandbytes`/`accelerate` trong `pyproject.toml:6` hiện là deps thừa, vẫn cài được nhưng không cần để chạy pipeline/ UI/ eval. Chỉ cần `faiss-cpu`, `rank-bm25`, `openai`, `python-dotenv`, `numpy`, `streamlit`.
+> Lưu ý: Sau khi gỡ `BAAI/bge-reranker-v2-m3`, project **không còn model local bắt buộc**. `torch`/`transformers`/`bitsandbytes`/`accelerate` trong `pyproject.toml:6` hiện là deps thừa, vẫn cài được nhưng không cần để chạy pipeline/ UI/ eval. Chỉ cần `faiss-cpu`, `rank-bm25`, `openai`, `python-dotenv`, `numpy`, `fastapi`, `uvicorn`, `pypdf`.
 
 ---
 
@@ -87,7 +87,7 @@ pip install -e ".[dev]"     # để chạy pytest/mypy
 Kiểm tra cài đặt:
 
 ```sh
-uv run python -c "import faiss, openai, streamlit; print('deps ok')"
+uv run python -c "import faiss, openai, fastapi; print('deps ok')"
 ```
 
 ### 3.4 Cấu hình `.env`
@@ -164,7 +164,7 @@ cat data/courses.json | head -50
 ### 5.1 Chạy tests
 
 ```sh
-# Toàn bộ suite (79 tests, ~16s)
+# Toàn bộ suite (209 tests, ~25s)
 uv run pytest -v
 
 # Chỉ test pipeline chính
@@ -174,13 +174,13 @@ uv run pytest tests/test_rag_core.py -v
 uv run pytest tests/test_generate_data.py -v
 ```
 
-Kỳ vọng: `79 passed`.
+Kỳ vọng: `209 passed`.
 
 ### 5.2 Type check
 
 ```sh
-uv run mypy rag_core app.py generate_data.py eval.py tests --strict
-# Success: no issues found in 18 source files
+uv run mypy
+# Success: no issues found in 39 source files
 ```
 
 ### 5.3 Smoke test pipeline (không cần API key)
@@ -257,29 +257,40 @@ Sau khi gỡ reranker, `hit@5 naive` và `hit@5 full` bằng nhau (cùng `Index.
 
 ---
 
-## 8. Chạy Streamlit UI
+## 8. Chạy web UI (React + FastAPI)
+
+UI là một React SPA trong `web/`, do FastAPI server (`server/`) phục vụ cùng API tại `/api`.
+
+**Yêu cầu thêm:** [Node.js](https://nodejs.org/) **20+** và `npm` (chỉ cần khi build/dev frontend).
+
+### 8.1 Dev mode (hot reload, 2 tiến trình)
 
 ```sh
-uv run streamlit run app.py
-# Mặc định http://localhost:8501
+# Terminal 1 — API backend tại http://127.0.0.1:8000/api
+uv run uvicorn server.main:app --reload
+
+# Terminal 2 — Vite dev server tại http://localhost:5173
+cd web && npm install && npm run dev
 ```
+
+Mở `http://localhost:5173` — Vite tự proxy `/api` về backend.
+
+### 8.2 Production mode (1 tiến trình)
+
+```sh
+cd web && npm run build   # tạo web/dist/
+uv run serve              # http://127.0.0.1:8000
+```
+
+`uv run serve` khởi động uvicorn trên `127.0.0.1:8000`, phục vụ SPA từ `web/dist/` kèm fallback về index.html cho các client-side route (ví dụ `/settings`).
 
 **Luồng sử dụng:**
 
-1. Màn hình **Register** → tạo user (username/password lưu plaintext demo, `rag_core/db.py:77`).
-2. **Login** → vào chat.
-3. Chat: mỗi tin nhắn gọi `RagCore.answer(prompt, session)` (`app.py:133`), hiển thị answer + expanders `Sources [1] title — chapter` (`app.py:80`), hoặc warning `refused` + `rephrase_suggestion`.
-4. **Log out** → history vẫn lưu trong `data/app.db`, đăng nhập lại sẽ khôi phục 6 turns gần nhất (`db.get_or_create_session`).
-
-**Tùy chọn chạy:**
-
-```sh
-# Đổi port
-uv run streamlit run app.py --server.port 8502
-
-# Chạy background
-nohup uv run streamlit run app.py &
-```
+1. Màn hình **Đăng ký** → tạo user (username/password lưu plaintext demo, `rag_core/db.py`).
+2. **Đăng nhập** → vào chat.
+3. Chat: mỗi tin nhắn gọi `POST /api/conversations/{id}/chat`, server chạy `RagCore.answer(prompt, session)`, hiển thị answer + citation cards `[n] title — chapter`, hoặc thẻ refusal/fallback + gợi ý viết lại.
+4. Sidebar: đổi tên/xóa cuộc trò chuyện; **📎 Tài liệu đính kèm** theo chat; toggle **Tìm kiếm web**.
+5. **Đăng xuất** → history vẫn lưu trong `data/app.db`, đăng nhập lại sẽ khôi phục 6 turns gần nhất (`db.get_or_create_session`).
 
 Yêu cầu: `.env` phải có `OPENROUTER_API_KEY`, `data/courses.json` + `documents.json` phải tồn tại (sinh trước ở bước 4). DB `data/app.db` tự tạo lần đầu.
 
@@ -337,8 +348,14 @@ core = RagCore(data_dir=path, embedder=my_embedder, generator=my_generator,
 
 ```
 .
-├── app.py                 # Streamlit UI
-├── generate_data.py       # Sinh synthetic data
+├── server/                 # FastAPI API + static serving
+│   ├── main.py             # app factory + SPA fallback + entrypoint (uv run serve)
+│   ├── routes.py           # /api/auth, /api/conversations, /api/chat, /api/attachments...
+│   ├── auth.py             # bearer token store
+│   ├── schemas.py          # Pydantic request/response models
+│   └── state.py            # AppState: Database + TokenStore + RagCore + AttachmentStore
+├── web/                    # React SPA (Node 20+, Vite)
+├── generate_data.py        # Sinh synthetic data
 ├── eval.py                # Đánh giá hit@5 + citation precision
 ├── eval_set.json          # 20 Q/A ground-truth
 ├── pyproject.toml         # deps + tool config
@@ -379,7 +396,7 @@ core = RagCore(data_dir=path, embedder=my_embedder, generator=my_generator,
 | `No module named 'faiss'` | Chưa `uv sync` | `uv sync` hoặc `pip install faiss-cpu` |
 | `401 Unauthorized` từ OpenRouter | Key sai/hết hạn | Kiểm tra key tại `https://openrouter.ai/keys`, thử `curl -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/models` |
 | `429 Rate limit` | Free tier giới hạn | Đợi 1 phút, pipeline đã tối ưu single-batched embed (`rag_core/index.py:54`) nên ít request |
-| `streamlit not found` | Chưa cài UI deps | `uv sync` + `uv run streamlit run app.py` |
+| `npm not found` hoặc build lỗi | Thiếu Node 20+ | Cài Node.js 20+ rồi `cd web && npm install && npm run build` |
 | `eval ground_truth not found` | Đổi seed khác 42 | Sinh lại `uv run python -m generate_data --seed 42` |
 | `mypy: cannot find ...` | Thiếu dev deps | `uv sync --extra dev` |
 

@@ -133,19 +133,32 @@ uv run python -m demo_memory "còn ví dụ về nó?"
 
 Registers/logs in a demo user against SQLite, asks a first question (passed through unchanged), then a follow-up whose rewritten query is printed before it enters retrieval, and shows the session history surviving a database reopen.
 
-## Streamlit UI
+## Web UI (React + FastAPI)
 
-The user-facing app: login and register screens gate access to the chat; chat messages flow through `answer()` with the logged-in user's Session; every answer renders its Citations as clickable expanders showing document + chapter; refusals render distinctly with their rephrase suggestion. History — including Citations and refusals — is stored in SQLite and restored on the next login.
+The user-facing app is a React single-page application served by the FastAPI backend (`server/`): a login/register screen gates access to the chat; chat messages flow through `answer()` with the logged-in user's Session; every answer renders its Citations as clickable cards showing document + chapter; refusals render distinctly with their rephrase suggestion. History — including Citations and refusals — is stored in SQLite and restored on the next login.
 
 - Upload PDF/TXT/MD làm nguồn tri thức tạm thời theo cuộc trò chuyện (citation kèm trang/heading).
+- Sidebar toggle ("Tìm kiếm web") merges web results into every retrieval when Firecrawl is configured.
 
-### Running
+### Running (dev mode)
+
+Two processes with hot reload:
 
 ```sh
-uv run streamlit run app.py
+uv run uvicorn server.main:app --reload   # API on http://127.0.0.1:8000/api
+cd web && npm run dev                     # Vite dev server on http://localhost:5173
 ```
 
-Requires `OPENROUTER_API_KEY` in `.env`. The app database (`data/app.db`) is created on first run.
+### Running (production mode)
+
+One process serves both the API and the built SPA:
+
+```sh
+cd web && npm run build
+uv run serve                              # http://127.0.0.1:8000
+```
+
+Requires Node 20+ for the `web/` build, `OPENROUTER_API_KEY` in `.env`, and the synthetic data from `generate_data.py`. The app database (`data/app.db`) is created on first run.
 
 ## Naive RAG core demo
 
