@@ -66,6 +66,13 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [turns.length, pendingQuestion]);
 
+  useEffect(() => {
+    setInput("");
+    setPendingQuestion(null);
+    setSendError(null);
+    if (textareaRef.current !== null) textareaRef.current.style.height = "auto";
+  }, [conversationId]);
+
   function submit(text: string): void {
     const trimmed = text.trim();
     if (trimmed.length === 0 || sendMutation.isPending) return;

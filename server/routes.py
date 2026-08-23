@@ -38,10 +38,7 @@ def get_current_user(
 ) -> User:
     if credentials is None or not credentials.credentials:
         raise HTTPException(status_code=401, detail="Missing bearer token.")
-    if credentials.credentials:
-        user_id = state.tokens.user_id_for(credentials.credentials)
-    else:
-        user_id = None
+    user_id = state.tokens.user_id_for(credentials.credentials)
     if user_id is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token.")
     user = state.db.get_user(user_id)

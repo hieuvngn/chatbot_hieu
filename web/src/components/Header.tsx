@@ -1,5 +1,5 @@
 import { LogOut, Menu, Settings } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import ThemeToggle from "./ThemeToggle";
 export default function Header() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const { data: conversations } = useQuery({ queryKey: ["conversations"], queryFn: api.conversations });
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: api.me });
@@ -23,6 +24,7 @@ export default function Header() {
 
   function logout(): void {
     setToken(null);
+    queryClient.clear();
     navigate("/login");
   }
 
