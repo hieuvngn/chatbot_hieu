@@ -41,7 +41,7 @@ from rag_core.models import MAX_TURNS, AnswerResult, Chunk, Session, Source
 from rag_core.rewrite import OpenRouterSessionRewriter, SessionRewriter
 from rag_core.skill_selector import OpenRouterSkillSelector, SkillSelector
 from rag_core.skills import SKILLS_DIR, Skill, load_skills
-from rag_core.web_search import WebSearcher
+from rag_core.web_search import FirecrawlWebSearcher, WebSearcher
 
 
 class RagCore:
@@ -536,6 +536,11 @@ def build_rag_core(config: Config | None = None) -> RagCore:
         if skills
         else None
     )
+    web_searcher: WebSearcher | None = (
+        FirecrawlWebSearcher(config.firecrawl_api_key)
+        if config.firecrawl_api_key
+        else None
+    )
     return RagCore(
         config.data_dir,
         embedder,
@@ -552,6 +557,7 @@ def build_rag_core(config: Config | None = None) -> RagCore:
         attachment_store=attachment_store,
         skills=skills,
         skill_selector=skill_selector,
+        web_searcher=web_searcher,
     )
 
 

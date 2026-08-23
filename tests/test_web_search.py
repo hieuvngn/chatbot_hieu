@@ -424,3 +424,17 @@ def test_corrective_with_empty_search_result_keeps_refusal(tmp_path: Path) -> No
 
     assert result.refused
     assert len(judge.calls) == 2, "empty web result must not waste a third judgment"
+
+
+def test_load_config_reads_firecrawl_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from rag_core.config import load_config
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    config = load_config(env_file="/nonexistent/.env")
+    assert config.firecrawl_api_key == ""
+
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-demo")
+    config = load_config(env_file="/nonexistent/.env")
+    assert config.firecrawl_api_key == "fc-demo"
