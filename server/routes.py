@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
+import sqlite3
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi.params import Form
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from rag_core.models import ConversationMeta, Turn, User
 from server.schemas import (
+    AttachmentOut,
     ChatIn,
     ConversationCreateIn,
     ConversationOut,
@@ -188,3 +193,54 @@ def chat(
 @router.get("/features", response_model=FeaturesOut)
 def features(state: StateDep) -> FeaturesOut:
     return FeaturesOut(has_web_search=bool(state.core.has_web_search))
+
+
+def _attachment_conversation(db_path: Path, attachment_id: str) -> str | None:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
+        row = conn.execute(
+            "SELECT conversation_id FROM attachments WHERE id = ?", (attachment_id,)
+        ).fetchone()
+    return str(row[0]) if row is not None else None
+
+
+@router.get("/attachments", response_model=list[AttachmentOut])
+def list_attachments(
+    conversation_id: str, current_user: CurrentUser, state: StateDep
+) -> list[AttachmentOut]:
+    _require_conversation(state, current_user, conversation_id)
+    return [
+        AttachmentOut.model_validate(meta)
+        for meta in state.attachments.list_for(conversation_id)
+    ]
+
+
+@router.post("/attachments", response_model=AttachmentOut, status_code=201)
+async def upload_attachment(
+    current_user: CurrentUser,
+    state: StateDep,
+    conversation_id: Annotated[str, Form()],
+    file: UploadFile,
+) -> AttachmentOut:
+    _require_conversation(state, current_user, conversation_id)
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="Missing file name.")
+    data = await file.read()
+    try:
+        meta = state.attachments.add(
+            conversation_id, file.filename, data, language=current_user.language
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return AttachmentOut.model_validate(meta)
+
+
+@router.delete("/attachments/{attachment_id}", status_code=204)
+def delete_attachment(attachment_id: str, current_user: CurrentUser, state: StateDep) -> None:
+    conversation_id = _attachment_conversation(state.db_path, attachment_id)
+    if conversation_id is None:
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+    _require_conversation(state, current_user, conversation_id)
+    try:
+        state.attachments.delete(attachment_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Attachment not found.") from None

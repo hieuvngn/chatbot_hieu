@@ -83,6 +83,18 @@ class FeaturesOut(BaseModel):
     has_web_search: bool
 
 
+class AttachmentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    conversation_id: str
+    filename: str
+    file_kind: str
+    size_bytes: int
+    chunk_count: int
+    created_at: str
+
+
 def citation_out(citation: Citation) -> CitationOut:
     return CitationOut(marker=citation.marker, source=SourceOut.model_validate(citation.source))
 

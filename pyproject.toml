@@ -16,6 +16,7 @@ dependencies = [
     "streamlit>=1.62.0",
     "pypdf>=4.0",
     "fastapi>=0.115",
+    "python-multipart>=0.0.9",
     "uvicorn>=0.30",
 ]
 
@@ -29,4 +30,5 @@ pythonpath = ["."]
 [tool.mypy]
 python_version = "3.14"
 strict = true
+explicit_package_bases = true
 files = ["app.py", "generate_data.py", "eval.py", "rag_core", "tests", "server"]
