@@ -16,4 +16,7 @@ skills-lock.json
 .superpowers/
 docs/superpowers
 .venv
-.env 
+.env
+
+web/node_modules/
+web/dist/
