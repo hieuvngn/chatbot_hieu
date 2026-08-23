@@ -20,15 +20,15 @@ class Database:
     demo database, not a security boundary.
 
     Thread-safety:
-    Streamlit's ``st.cache_resource`` caches the ``Database`` instance and
-    reuses it across script reruns that may execute on different threads.
-    The original implementation held a single ``sqlite3.Connection`` (which
-    is bound to its creating thread when ``check_same_thread=True``) and
-    therefore raised ``ProgrammingError`` on the next rerun.  This class now
-    opens a **new connection per operation** with ``check_same_thread=False``
-    so it can be safely reused from any thread.  A deprecated long-lived
-    handle is still kept as ``self._conn`` for backwards compatibility with
-    code that accesses it directly.
+    The server (uvicorn/FastAPI) shares one ``Database`` instance across
+    request-handling threads.  An earlier implementation held a single
+    ``sqlite3.Connection`` (which is bound to its creating thread when
+    ``check_same_thread=True``) and therefore raised ``ProgrammingError``
+    when another thread used it.  This class opens a **new connection per
+    operation** with ``check_same_thread=False`` so it can be safely reused
+    from any thread.  A deprecated long-lived handle is still kept as
+    ``self._conn`` for backwards compatibility with code that accesses it
+    directly.
     """
 
     def __init__(self, path: str | Path) -> None:
