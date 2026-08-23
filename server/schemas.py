@@ -74,6 +74,15 @@ class ConversationRenameIn(BaseModel):
     title: str
 
 
+class ChatIn(BaseModel):
+    message: str
+    use_web: bool = False
+
+
+class FeaturesOut(BaseModel):
+    has_web_search: bool
+
+
 def citation_out(citation: Citation) -> CitationOut:
     return CitationOut(marker=citation.marker, source=SourceOut.model_validate(citation.source))
 

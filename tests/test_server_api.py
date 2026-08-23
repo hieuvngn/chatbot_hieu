@@ -125,3 +125,54 @@ def test_ownership_is_404(tmp_path: Path) -> None:
     )
     assert client.delete(f"/api/conversations/{conv['id']}", headers=h["bob"]).status_code == 404
     assert client.get(f"/api/conversations/{conv['id']}/messages", headers=h["bob"]).status_code == 404
+
+
+def test_chat_round_trip_persists(tmp_path: Path) -> None:
+    client, _, core, h = make_client(tmp_path)
+    conv = _create_conversation(client, h["alice"])
+
+    reply = client.post(
+        f"/api/conversations/{conv['id']}/chat",
+        json={"message": "giải thích bảng băm"},
+        headers=h["alice"],
+    )
+    assert reply.status_code == 200
+    turn = reply.json()
+    assert turn["role"] == "assistant"
+    assert turn["text"] == "echo: giải thích bảng băm"
+    assert turn["citations"][0]["marker"] == "[1]"
+    assert turn["citations"][0]["source"]["document_title"] == "Slides Cấu trúc dữ liệu"
+    assert turn["refused"] is False
+    assert core.calls == [("giải thích bảng băm", conv["id"], False)]
+
+    messages = client.get(f"/api/conversations/{conv['id']}/messages", headers=h["alice"]).json()
+    assert [t["role"] for t in messages] == ["user", "assistant"]
+    assert messages[0]["text"] == "giải thích bảng băm"
+
+
+def test_chat_passes_use_web_flag(tmp_path: Path) -> None:
+    client, _, core, h = make_client(tmp_path)
+    core.has_web_search = True
+    conv = _create_conversation(client, h["alice"])
+    client.post(
+        f"/api/conversations/{conv['id']}/chat",
+        json={"message": "xin chào", "use_web": True},
+        headers=h["alice"],
+    )
+    assert core.calls[-1][2] is True
+
+
+def test_chat_rejects_blank_message(tmp_path: Path) -> None:
+    client, _, _, h = make_client(tmp_path)
+    conv = _create_conversation(client, h["alice"])
+    blank = client.post(
+        f"/api/conversations/{conv['id']}/chat", json={"message": "   "}, headers=h["alice"]
+    )
+    assert blank.status_code == 400
+
+
+def test_features_endpoint(tmp_path: Path) -> None:
+    client, _, core, _ = make_client(tmp_path)
+    assert client.get("/api/features").json() == {"has_web_search": False}
+    core.has_web_search = True
+    assert client.get("/api/features").json() == {"has_web_search": True}

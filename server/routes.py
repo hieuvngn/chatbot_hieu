@@ -7,11 +7,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from rag_core.models import ConversationMeta, User
+from rag_core.models import ConversationMeta, Turn, User
 from server.schemas import (
+    ChatIn,
     ConversationCreateIn,
     ConversationOut,
     ConversationRenameIn,
+    FeaturesOut,
     ProfileIn,
     RegisterIn,
     TokenOut,
@@ -150,3 +152,39 @@ def list_messages(
     _require_conversation(state, current_user, conversation_id)
     session = state.db.get_session(conversation_id)
     return [turn_out(turn) for turn in session.turns]
+
+
+@router.post("/conversations/{conversation_id}/chat", response_model=TurnOut)
+def chat(
+    conversation_id: str, body: ChatIn, current_user: CurrentUser, state: StateDep
+) -> TurnOut:
+    _require_conversation(state, current_user, conversation_id)
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message must not be empty.")
+    session = state.db.get_session(conversation_id)
+    result = state.core.answer(message, session, use_web=body.use_web)
+    state.db.append_exchange(
+        conversation_id,
+        message,
+        result.answer,
+        citations=result.citations,
+        refused=result.refused,
+        rephrase_suggestion=result.rephrase_suggestion,
+        skills_applied=result.skills_applied,
+    )
+    return turn_out(
+        Turn(
+            role="assistant",
+            text=result.answer,
+            citations=result.citations,
+            refused=result.refused,
+            rephrase_suggestion=result.rephrase_suggestion,
+            skills_applied=result.skills_applied,
+        )
+    )
+
+
+@router.get("/features", response_model=FeaturesOut)
+def features(state: StateDep) -> FeaturesOut:
+    return FeaturesOut(has_web_search=bool(state.core.has_web_search))
