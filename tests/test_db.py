@@ -330,7 +330,9 @@ def test_update_user_profile(tmp_path: Path) -> None:
     assert updated.display_name == "Hiếu Nguyễn"
     assert updated.language == "en"
     # persist
-    assert db.login("hieu", "pw").language == "en"
+    logged_in = db.login("hieu", "pw")
+    assert logged_in is not None
+    assert logged_in.language == "en"
 
 
 def test_update_user_profile_validation(tmp_path: Path) -> None:
