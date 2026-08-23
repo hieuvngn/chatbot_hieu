@@ -107,11 +107,16 @@ def render_citations(citations: list[Citation]) -> None:
         label = f"[{citation.marker}] {source.document_title} — {source.chapter}"
         with st.expander(label):
             st.write(f"Document: {source.document_title} ({source.document_id})")
-            st.write(f"Chapter: {source.chapter}")
-            origin = "tài liệu đính kèm" if source.kind == "upload" else "kho tài liệu môn học"
-            st.write(f"Nguồn: {origin}")
-            st.write(f"Course: {source.course_code}")
-            st.write(f"Kind: {source.kind} ({source.language})")
+            if source.kind == "web":
+                st.markdown(f"Nguồn: [{source.chapter}]({source.chapter})")
+            else:
+                st.write(f"Chapter: {source.chapter}")
+                origin = (
+                    "tài liệu đính kèm" if source.kind == "upload" else "kho tài liệu môn học"
+                )
+                st.write(f"Nguồn: {origin}")
+                st.write(f"Course: {source.course_code}")
+                st.write(f"Kind: {source.kind} ({source.language})")
 
 
 def _is_fallback(text: str) -> bool:
@@ -235,6 +240,15 @@ def render_sidebar(user: User) -> None:
         st.divider()
         render_attachments()
         st.divider()
+        if get_core().has_web_search:
+            st.toggle(
+                "Tìm kiếm web",
+                key="use_web",
+                help="Mỗi câu hỏi được bổ sung kết quả từ web qua Firecrawl.",
+            )
+        else:
+            st.caption("🌐 Thêm FIRECRAWL_API_KEY vào .env để bật tìm kiếm web.")
+        st.divider()
         display = user.display_name or user.username
         st.caption(f"👤 {display} ({user.username})")
         if st.button("Profile / Setting", use_container_width=True, key="open_profile"):
@@ -295,7 +309,9 @@ def render_chat(user: User) -> None:
         with st.chat_message("user"):
             st.write(prompt)
         with st.spinner("Retrieving material and composing the answer..."):
-            result = get_core().answer(prompt, session)
+            result = get_core().answer(
+                prompt, session, use_web=bool(st.session_state.get("use_web"))
+            )
         db.append_exchange(
             session_id,
             prompt,
