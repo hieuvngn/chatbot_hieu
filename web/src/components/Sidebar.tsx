@@ -1,4 +1,4 @@
-import { MoreHorizontal, Plus } from "lucide-react";
+import { Globe, MoreHorizontal, Plus } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -11,16 +11,21 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
+import AttachmentsSection from "@/components/AttachmentsSection";
+import { useWebToggle } from "@/lib/web-toggle-context";
 
 export default function Sidebar({ onNavigated }: { onNavigated?: () => void }) {
   const navigate = useNavigate();
   const { conversationId } = useParams();
   const queryClient = useQueryClient();
+  const { useWeb, setUseWeb } = useWebToggle();
   const { data: conversations = [] } = useQuery({
     queryKey: ["conversations"],
     queryFn: api.conversations,
   });
+  const { data: features } = useQuery({ queryKey: ["features"], queryFn: api.features });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["conversations"] });
 
@@ -71,6 +76,15 @@ export default function Sidebar({ onNavigated }: { onNavigated?: () => void }) {
         ))}
         {conversations.length === 0 && <p className="px-2 text-sm text-zinc-400">Chưa có chat nào.</p>}
       </nav>
+
+      <AttachmentsSection />
+
+      {features?.has_web_search && (
+        <label className="flex cursor-pointer items-center justify-between rounded-xl px-2 py-1.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-900">
+          <span className="flex items-center gap-2"><Globe size={14} /> Tìm kiếm web</span>
+          <Switch checked={useWeb} onCheckedChange={setUseWeb} />
+        </label>
+      )}
 
       <p className="px-2 pb-1 text-[11px] leading-snug text-zinc-400">
         <Link to="/settings" className="underline-offset-2 hover:underline" onClick={onNavigated}>

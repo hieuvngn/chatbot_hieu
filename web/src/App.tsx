@@ -4,6 +4,7 @@ import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import AppLayout from "@/components/AppLayout";
 import RequireAuth from "@/components/RequireAuth";
 import { api } from "@/lib/api";
+import { WebToggleProvider } from "@/lib/web-toggle-context";
 import ChatPage from "./pages/ChatPage";
 import LoginPage from "./pages/LoginPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -36,7 +37,13 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route element={<RequireAuth />}>
-        <Route element={<AppLayout />}>
+        <Route
+          element={
+            <WebToggleProvider>
+              <AppLayout />
+            </WebToggleProvider>
+          }
+        >
           <Route index element={<ChatRedirect />} />
           <Route path="/c/:conversationId" element={<ChatPage />} />
           <Route path="/settings" element={<SettingsPage />} />

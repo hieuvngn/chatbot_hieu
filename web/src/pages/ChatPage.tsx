@@ -5,6 +5,7 @@ import { useParams } from "react-router-dom";
 import ChatMessage from "@/components/ChatMessage";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
+import { useWebToggle } from "@/lib/web-toggle-context";
 
 const SUGGESTIONS = [
   "Giải thích bảng băm là gì?",
@@ -29,6 +30,7 @@ function TypingIndicator() {
 export default function ChatPage() {
   const { conversationId } = useParams();
   const queryClient = useQueryClient();
+  const { useWeb } = useWebToggle();
   const [input, setInput] = useState("");
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -42,7 +44,7 @@ export default function ChatPage() {
   });
 
   const sendMutation = useMutation({
-    mutationFn: (message: string) => api.chat(conversationId!, message, false),
+    mutationFn: (message: string) => api.chat(conversationId!, message, useWeb),
     onMutate: (message) => {
       setPendingQuestion(message);
       setSendError(null);
