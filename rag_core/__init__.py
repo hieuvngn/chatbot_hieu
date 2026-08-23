@@ -374,11 +374,28 @@ class RagCore:
         judgment = judge.assess(refined, refined_chunks)
         if self._is_acceptable(judgment):
             return self._generate_result(refined, refined_chunks)
+        # CRAG correction: one web-search pass before giving up
+        if self._web_searcher is not None:
+            merged = self._corrective_merge(refined, refined_chunks)
+            if merged:
+                judgment = judge.assess(refined, merged)
+                if self._is_acceptable(judgment):
+                    return self._generate_result(refined, merged)
         if self._enable_fallback:
             return self._fallback_result(refined)
         return self._refused_result(
             judgment.rephrase_suggestion or DEFAULT_REPHRASE_SUGGESTION
         )
+
+    def _corrective_merge(
+        self, refined_query: str, refined_chunks: list[Chunk]
+    ) -> list[Chunk]:
+        """One CRAG correction step: fuse a fresh web search into the refined retrieval."""
+        web_chunks = self._safe_web_search(refined_query)
+        if not web_chunks:
+            return []
+        merged = rrf_merge_items([refined_chunks, web_chunks])
+        return dedupe_by_source(merged, FINAL_TOP_K)
 
     def _fallback_result(self, question: str) -> AnswerResult:
         fallback_text = ""

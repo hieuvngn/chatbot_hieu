@@ -316,3 +316,111 @@ def test_other_without_web_still_refuses(tmp_path: Path) -> None:
     result = core.answer("thời tiết hôm nay thế nào", fresh_session(), use_web=False)
 
     assert "Tôi chỉ hỗ trợ" in result.answer
+
+
+class CiteAllGenerator:
+    """Cites every provided source so per-kind citation assertions are deterministic."""
+
+    def generate(
+        self,
+        question: str,
+        chunks: list[Chunk],
+        feedback: str | None = None,
+        *,
+        skill_instructions: str = "",
+    ) -> str:
+        return " ".join(f"[{i}]" for i in range(1, len(chunks) + 1))
+
+
+def test_corrective_web_pass_answers_after_failed_refine(tmp_path: Path) -> None:
+    searcher = FakeWebSearcher()
+    judge = ScriptedJudge(levels=["low", "low", "high"])
+    rewriter = FixedRewriter(rewritten="hash tables")
+    ds = gd.generate(seed=SEED)
+    gd.write(ds, tmp_path)
+    core = RagCore(
+        tmp_path,
+        HashEmbedder(),
+        CiteAllGenerator(),
+        judge=judge,
+        rewriter=rewriter,
+        web_searcher=searcher,
+    )
+
+    result = core.answer("câu hỏi mơ hồ", fresh_session())
+
+    assert not result.refused
+    assert result.answer
+    assert len(judge.calls) == 3, "initial + refine + corrective assessment"
+    assert searcher.queries == ["hash tables"], "corrective searches the rewritten query"
+    merged_sources = judge.calls[2][1]
+    assert any(c.source.kind == "web" for c in merged_sources)
+    assert any(c.source.kind != "web" for c in merged_sources), (
+        "corrective merges local and web, it does not replace local"
+    )
+    assert any(c.source.kind == "web" for c in result.citations)
+
+
+def test_corrective_still_failing_falls_back_to_refusal(tmp_path: Path) -> None:
+    searcher = FakeWebSearcher()
+    judge = ScriptedJudge(levels=["low", "low", "low"])
+    rewriter = FixedRewriter()
+    ds = gd.generate(seed=SEED)
+    gd.write(ds, tmp_path)
+    core = RagCore(
+        tmp_path,
+        HashEmbedder(),
+        FakeGenerator(),
+        judge=judge,
+        rewriter=rewriter,
+        web_searcher=searcher,
+    )
+
+    result = core.answer("câu hỏi mơ hồ", fresh_session())
+
+    assert result.refused
+    assert result.citations == []
+    assert len(judge.calls) == 3
+
+
+def test_corrective_skipped_when_no_searcher(tmp_path: Path) -> None:
+    judge = ScriptedJudge(levels=["low", "low"])
+    rewriter = FixedRewriter()
+    ds = gd.generate(seed=SEED)
+    gd.write(ds, tmp_path)
+    core = RagCore(
+        tmp_path,
+        HashEmbedder(),
+        FakeGenerator(),
+        judge=judge,
+        rewriter=rewriter,
+    )
+
+    result = core.answer("giải thích bảng băm là gì?", fresh_session())
+
+    assert result.refused
+    assert len(judge.calls) == 2, "behavior identical to pre-web-search pipeline"
+
+
+def test_corrective_with_empty_search_result_keeps_refusal(tmp_path: Path) -> None:
+    class EmptySearcher:
+        def search(self, query: str, k: int = WEB_TOP_K) -> list[Chunk]:
+            return []
+
+    judge = ScriptedJudge(levels=["low", "low"])
+    rewriter = FixedRewriter()
+    ds = gd.generate(seed=SEED)
+    gd.write(ds, tmp_path)
+    core = RagCore(
+        tmp_path,
+        HashEmbedder(),
+        FakeGenerator(),
+        judge=judge,
+        rewriter=rewriter,
+        web_searcher=EmptySearcher(),
+    )
+
+    result = core.answer("câu hỏi mơ hồ", fresh_session())
+
+    assert result.refused
+    assert len(judge.calls) == 2, "empty web result must not waste a third judgment"
