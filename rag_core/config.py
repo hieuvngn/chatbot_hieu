@@ -64,5 +64,5 @@ def load_config(
         base_url=os.environ.get("OPENROUTER_BASE_URL", DEFAULT_BASE_URL),
         allow_medium=_parse_bool("RAG_ALLOW_MEDIUM", True),
         enable_fallback=_parse_bool("RAG_ENABLE_FALLBACK", True),
-        firecrawl_api_key=os.environ.get("FIRECRAWL_API_KEY", ""),
+        firecrawl_api_key=os.environ.get("FIRECRAWL_API_KEY", "").strip(),
     )

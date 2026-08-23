@@ -288,6 +288,7 @@ def test_searcher_failure_degrades_to_kb_only(tmp_path: Path) -> None:
     result = core.answer("giải thích bảng băm là gì?", fresh_session(), use_web=True)
 
     assert not result.refused
+    assert result.sources, "degradation must still retrieve from the KB"
     assert all(s.kind != "web" for s in result.sources)
 
 
@@ -438,3 +439,30 @@ def test_load_config_reads_firecrawl_key(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-demo")
     config = load_config(env_file="/nonexistent/.env")
     assert config.firecrawl_api_key == "fc-demo"
+
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "  fc-spaces  ")
+    config = load_config(env_file="/nonexistent/.env")
+    assert config.firecrawl_api_key == "fc-spaces"
+
+
+def test_worst_case_toggle_plus_corrective_makes_two_calls(tmp_path: Path) -> None:
+    searcher = FakeWebSearcher()
+    judge = ScriptedJudge(levels=["low", "low", "high"])
+    rewriter = FixedRewriter(rewritten="hash tables")
+    ds = gd.generate(seed=SEED)
+    gd.write(ds, tmp_path)
+    core = RagCore(
+        tmp_path,
+        HashEmbedder(),
+        CiteAllGenerator(),
+        judge=judge,
+        rewriter=rewriter,
+        web_searcher=searcher,
+    )
+
+    result = core.answer("câu hỏi mơ hồ", fresh_session(), use_web=True)
+
+    assert not result.refused
+    assert len(searcher.queries) == 2, (
+        "worst case must respect the 2-call budget: retrieval + corrective"
+    )
