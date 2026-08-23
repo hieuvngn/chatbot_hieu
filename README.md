@@ -102,6 +102,13 @@ uv run python -m demo_crag "giải thích bảng băm là gì?"
 
 Prints the top-5 Sources, the judge's verdict, the refine rewrite with its re-retrieved top-5 and second verdict, and the final decision — a generated answer with citations or a refusal with a rephrase suggestion.
 
+## Web search (Firecrawl, optional)
+
+When local retrieval is judged insufficient even after its single Refine, the pipeline performs one corrective web search through the [Firecrawl Search API](https://docs.firecrawl.dev/features/search) and answers from the merged sources (CRAG-style correction). A sidebar toggle ("Tìm kiếm web") additionally merges web results into every retrieval.
+
+- Configure with `FIRECRAWL_API_KEY=...` in `.env` (see `.env.example`). Without a key the feature is silently disabled and the bot behaves exactly as before.
+- Web results appear as ordinary citations with `kind="web"`; each citation links back to the source URL. At most 2 Firecrawl calls are made per answer (5 results each, page content truncated to 4000 chars).
+
 ## Answer check
 
 After generation, the generation-side quality gate verifies the draft answer claim-by-claim against the cited Sources. An LLM verifier checks that every claim is supported by a cited Source; if any claim is unsupported, the pipeline regenerates exactly once with concrete feedback naming the unsupported claims. If the regenerated answer still fails the check, the pipeline refuses with a rephrase suggestion — never serving an unverified answer. A valid answer passes through unchanged with its Citations intact. `build_rag_core()` wires the verifier in automatically.
