@@ -7,8 +7,18 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from rag_core.models import User
-from server.schemas import RegisterIn, TokenOut, UserOut
+from rag_core.models import ConversationMeta, User
+from server.schemas import (
+    ConversationCreateIn,
+    ConversationOut,
+    ConversationRenameIn,
+    ProfileIn,
+    RegisterIn,
+    TokenOut,
+    TurnOut,
+    UserOut,
+    turn_out,
+)
 from server.state import AppState, get_state
 
 router = APIRouter()
@@ -62,3 +72,81 @@ def login(body: RegisterIn, state: StateDep) -> TokenOut:
 @router.get("/auth/me", response_model=UserOut)
 def me(current_user: CurrentUser) -> UserOut:
     return UserOut.model_validate(current_user)
+
+
+def _require_conversation(state: AppState, user: User, conversation_id: str) -> None:
+    try:
+        session = state.db.get_session(conversation_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from None
+    if session.user_id != str(user.id):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+
+@router.patch("/users/me", response_model=UserOut)
+def update_profile(body: ProfileIn, current_user: CurrentUser, state: StateDep) -> UserOut:
+    try:
+        updated = state.db.update_user_profile(
+            current_user.id, display_name=body.display_name, language=body.language
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return UserOut.model_validate(updated)
+
+
+@router.get("/conversations", response_model=list[ConversationOut])
+def list_conversations(current_user: CurrentUser, state: StateDep) -> list[ConversationOut]:
+    return [
+        ConversationOut.model_validate(meta)
+        for meta in state.db.list_conversations(current_user.id)
+    ]
+
+
+@router.post("/conversations", response_model=ConversationOut, status_code=201)
+def create_conversation(
+    body: ConversationCreateIn, current_user: CurrentUser, state: StateDep
+) -> ConversationOut:
+    title = body.title.strip()
+    if not (1 <= len(title) <= 50):
+        raise HTTPException(status_code=400, detail="Title must be 1..50 chars.")
+    session = state.db.create_conversation(current_user.id, title=title)
+    metas: list[ConversationMeta] = state.db.list_conversations(current_user.id)
+    meta = next(m for m in metas if m.id == session.id)
+    return ConversationOut.model_validate(meta)
+
+
+@router.patch("/conversations/{conversation_id}", response_model=ConversationOut)
+def rename_conversation(
+    conversation_id: str, body: ConversationRenameIn, current_user: CurrentUser, state: StateDep
+) -> ConversationOut:
+    _require_conversation(state, current_user, conversation_id)
+    try:
+        state.db.update_conversation_title(conversation_id, body.title)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    metas: list[ConversationMeta] = state.db.list_conversations(current_user.id)
+    meta = next(m for m in metas if m.id == conversation_id)
+    return ConversationOut.model_validate(meta)
+
+
+@router.delete("/conversations/{conversation_id}", status_code=204)
+def delete_conversation(conversation_id: str, current_user: CurrentUser, state: StateDep) -> None:
+    _require_conversation(state, current_user, conversation_id)
+    try:
+        state.db.delete_conversation(conversation_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from None
+
+
+@router.delete("/conversations", status_code=204)
+def clear_conversations(current_user: CurrentUser, state: StateDep) -> None:
+    state.db.clear_all_conversations(current_user.id)
+
+
+@router.get("/conversations/{conversation_id}/messages", response_model=list[TurnOut])
+def list_messages(
+    conversation_id: str, current_user: CurrentUser, state: StateDep
+) -> list[TurnOut]:
+    _require_conversation(state, current_user, conversation_id)
+    session = state.db.get_session(conversation_id)
+    return [turn_out(turn) for turn in session.turns]
