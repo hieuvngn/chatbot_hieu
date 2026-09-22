@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for the same branch/PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+  RAG_DATA_DIR: ./data
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Python: unit + integration tests
+  # -----------------------------------------------------------------------
+  test-python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache-dependency-type: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run unit + integration tests
+        run: uv run pytest tests/ -m "not system" -q
+
+      - name: Type check (mypy)
+        run: uv run mypy .
+
+  # -----------------------------------------------------------------------
+  # Python: system tests (needs OpenRouter API key)
+  # -----------------------------------------------------------------------
+  test-python-system:
+    name: Python system tests
+    runs-on: ubuntu-latest
+    if: env.OPENROUTER_API_KEY != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.13"
+          cache-dependency-type: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Generate data
+        run: uv run python -m generate_data --seed 42
+
+      - name: Run system tests
+        run: uv run pytest tests/test_system_api.py -m system -q
+
+  # -----------------------------------------------------------------------
+  # Web: typecheck + build
+  # -----------------------------------------------------------------------
+  test-web:
+    name: Web build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc -b
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build

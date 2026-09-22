@@ -1,6 +1,7 @@
 ---
 name: exam-prep
 description: Trình bày câu trả lời theo cấu trúc ôn thi gồm Ý chính, Ví dụ minh họa, và 2 câu hỏi Tự luyện ở cuối
+keywords: ôn thi, ôn tập, thi cuối kỳ, giữa kỳ, luyện đề, exam, midterm, final, revision, chuẩn bị thi
 ---
 Khi trả lời:
 - Mở đầu bằng mục "Ý chính": các gạch đầu dòng cô đọng, dễ học thuộc.

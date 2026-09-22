@@ -5,6 +5,7 @@ import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
+import { useAttachmentViewer } from "@/lib/attachment-viewer-context";
 
 const KIND_ICONS: Record<string, string> = { pdf: "📄", md: "📝", txt: "🗒️" };
 const MAX_FILES = 3; // MAX_FILES_PER_CONVERSATION in rag_core.attachments
@@ -13,6 +14,7 @@ export default function AttachmentsSection() {
   const { conversationId } = useParams();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { openAttachment } = useAttachmentViewer();
 
   const { data: attachments = [] } = useQuery({
     queryKey: ["attachments", conversationId],
@@ -47,14 +49,23 @@ export default function AttachmentsSection() {
       </p>
       <ul className="space-y-1 px-2">
         {attachments.map((attachment) => (
-          <li key={attachment.id} className="group flex items-center gap-1.5 rounded-lg px-1 py-1 hover:bg-zinc-50 dark:hover:bg-zinc-900">
+          <li
+            key={attachment.id}
+            className="group flex items-center gap-1.5 rounded-lg px-1 py-1 hover:bg-zinc-50 dark:hover:bg-zinc-900"
+          >
             <span className="text-sm">{KIND_ICONS[attachment.file_kind] ?? "📄"}</span>
-            <span className="min-w-0 flex-1">
+            <button
+              type="button"
+              onClick={() => openAttachment(attachment.id)}
+              className="min-w-0 flex-1 text-left"
+              aria-label={`Xem ${attachment.filename}`}
+            >
               <span className="block truncate text-xs">{attachment.filename}</span>
               <span className="block text-[10px] text-zinc-400">
-                {attachment.chunk_count} đoạn · {Math.max(1, Math.floor(attachment.size_bytes / 1024))} KB
+                {attachment.chunk_count} đoạn ·{" "}
+                {Math.max(1, Math.floor(attachment.size_bytes / 1024))} KB
               </span>
-            </span>
+            </button>
             <Button
               variant="ghost"
               size="icon"
@@ -68,7 +79,9 @@ export default function AttachmentsSection() {
         ))}
       </ul>
       {atLimit ? (
-        <p className="px-2 pt-1 text-[11px] text-zinc-400">Đã đạt giới hạn {MAX_FILES} tài liệu cho chat này.</p>
+        <p className="px-2 pt-1 text-[11px] text-zinc-400">
+          Đã đạt giới hạn {MAX_FILES} tài liệu cho chat này.
+        </p>
       ) : (
         <>
           <input
@@ -89,7 +102,8 @@ export default function AttachmentsSection() {
             disabled={uploadMutation.isPending}
             onClick={() => fileInputRef.current?.click()}
           >
-            <Upload size={13} /> {uploadMutation.isPending ? "Đang xử lý…" : "Thêm tài liệu"}
+            <Upload size={13} />{" "}
+            {uploadMutation.isPending ? "Đang xử lý…" : "Thêm tài liệu"}
           </Button>
         </>
       )}

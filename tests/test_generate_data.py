@@ -84,9 +84,10 @@ def test_prerequisites_strictly_precede_their_course() -> None:
             ), f"{c.code} (semester {c.semester}) depends on {prereq} (semester {by_code[prereq].semester})"
 
 
-def test_generates_40_documents() -> None:
+def test_generates_at_least_40_documents_by_default() -> None:
     ds = dataset()
-    assert len(ds.documents) == 40
+    assert len(ds.documents) >= 40
+
 
 
 def test_documents_reference_known_courses() -> None:
@@ -105,12 +106,13 @@ def test_documents_are_mixed_vietnamese_and_english() -> None:
 def test_documents_have_chapters_with_content() -> None:
     ds = dataset()
     for d in ds.documents:
-        assert d.kind in {"slides", "textbook"}
+        assert d.kind in gd.ALL_DOCUMENT_KINDS
         assert d.title
         assert len(d.chapters) >= 2
         for ch in d.chapters:
             assert ch.title
             assert ch.content
+
 
 
 def test_document_content_references_its_course() -> None:
@@ -192,3 +194,124 @@ def test_cli_writes_data_dir(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert (out / "courses.json").exists()
     assert (out / "documents.json").exists()
+
+def test_default_dataset_has_no_extra_documents() -> None:
+    ds = dataset()
+    extra_ids = [d for d in ds.documents if int(d.id.split("-")[1]) > 40]
+    assert extra_ids == []
+
+
+def test_extra_documents_only_added_when_requested() -> None:
+    base = gd.generate(seed=SEED)
+    extended = gd.generate(seed=SEED, extra_documents=20)
+    assert len(extended.documents) == len(base.documents) + 20
+    extra_kinds = {d.kind for d in extended.documents[len(base.documents):]}
+    assert extra_kinds.issubset(set(gd.EXTRA_DOCUMENT_KINDS))
+
+
+def test_extra_documents_have_unique_ids() -> None:
+    ds = gd.generate(seed=SEED, extra_documents=20)
+    ids = [d.id for d in ds.documents]
+    assert len(ids) == len(set(ids))
+    assert ids[-1] == f"DOC-{gd.NUM_DOCUMENTS + 20:03d}"
+
+
+def test_extra_documents_cover_all_new_kinds() -> None:
+    ds = gd.generate(seed=SEED, extra_documents=20)
+    kinds = {d.kind for d in ds.documents if int(d.id.split("-")[1]) > 40}
+    for kind in gd.EXTRA_DOCUMENT_KINDS:
+        assert kind in kinds, f"missing kind {kind} in extra documents"
+
+
+def test_extra_documents_have_vietnamese_majority() -> None:
+    ds = gd.generate(seed=SEED, extra_documents=40)
+    extras = [d for d in ds.documents if int(d.id.split("-")[1]) > 40]
+    vi = sum(1 for d in extras if d.language == "vi")
+    en = sum(1 for d in extras if d.language == "en")
+    assert vi > en
+
+
+def test_extra_documents_reference_their_course() -> None:
+    ds = gd.generate(seed=SEED, extra_documents=20)
+    courses = {c.code: c for c in ds.courses}
+    extras = [d for d in ds.documents if int(d.id.split("-")[1]) > 40]
+    for d in extras:
+        course = courses[d.course_code]
+        text = " ".join(ch.content for ch in d.chapters).lower()
+        assert (
+            course.code.lower() in text
+            or course.name.lower() in text
+            or course.name_en.lower() in text
+        ), f"document {d.id} does not reference its course {course.code}"
+
+
+def test_extra_documents_reference_topics() -> None:
+    ds = gd.generate(seed=SEED, extra_documents=20)
+    extras = [d for d in ds.documents if int(d.id.split("-")[1]) > 40]
+    for d in extras:
+        text = " ".join(ch.content for ch in d.chapters).lower()
+        hits = [t for t in _course_topics(d) if t.lower() in text]
+        assert hits, (
+            f"document {d.id} ({d.language}) references none of its course's "
+            f"topics: {_course_topics(d)}"
+        )
+
+
+def test_extra_documents_are_deterministic() -> None:
+    first = gd.generate(seed=SEED, extra_documents=20)
+    second = gd.generate(seed=SEED, extra_documents=20)
+    extras_1 = [d for d in first.documents if int(d.id.split("-")[1]) > 40]
+    extras_2 = [d for d in second.documents if int(d.id.split("-")[1]) > 40]
+    assert extras_1 == extras_2
+
+
+def test_ground_truths_still_present_when_extras_added() -> None:
+    ds = gd.generate(seed=SEED, extra_documents=40)
+    import eval as ev
+
+    items = ev.load_eval_set(ev.DEFAULT_EVAL_SET)
+    chapters = {(d.id, ch.title) for d in ds.documents for ch in d.chapters}
+    for item in items:
+        truth = (item.ground_truth.document_id, item.ground_truth.chapter)
+        assert truth in chapters, f"ground truth {truth} lost in extended dataset"
+
+
+def test_llm_client_can_rewrite_extra_section() -> None:
+    called: list[tuple[str, str, str, str]] = []
+
+    class StubClient(gd._LLMClient):
+        def rewrite_section(
+            self, content: str, kind: str, language: str, course: gd.Course
+        ) -> str | None:
+            called.append((course.code, kind, language, content[:20]))
+            return content + "\n\n[LLM-rewritten]"
+
+    ds = gd.generate(seed=SEED, extra_documents=8, llm_client=StubClient())
+    extras = [d for d in ds.documents if int(d.id.split("-")[1]) > 40]
+    assert extras, "expected extras to be generated"
+    # Each extra document has intro + summary rewritten (2 calls per doc)
+    assert len(called) == 8 * 2
+    # Rewrite only applied to extra kinds
+    assert all(kind in gd.EXTRA_DOCUMENT_KINDS for _, kind, _, _ in called)
+    # LLM tail marker should appear somewhere in the extra doc bodies
+    joined = " ".join(ch.content for d in extras for ch in d.chapters)
+    assert "[LLM-rewritten]" in joined
+
+
+def test_llm_client_failure_falls_back_to_template() -> None:
+    class FailingClient(gd._LLMClient):
+        def rewrite_section(
+            self, content: str, kind: str, language: str, course: gd.Course
+        ) -> str | None:
+            raise RuntimeError("LLM offline")
+
+    ds = gd.generate(seed=SEED, extra_documents=4, llm_client=FailingClient())
+    extras = [d for d in ds.documents if int(d.id.split("-")[1]) > 40]
+    joined = " ".join(ch.content for d in extras for ch in d.chapters)
+    # No marker injected, but content still references its course (template path)
+    for d in extras:
+        course = next(c for c in ds.courses if c.code == d.course_code)
+        assert (
+            course.code.lower() in joined.lower()
+            or course.name.lower() in joined.lower()
+        )

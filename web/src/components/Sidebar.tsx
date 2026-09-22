@@ -28,7 +28,6 @@ export default function Sidebar({ onNavigated }: { onNavigated?: () => void }) {
   const { data: features } = useQuery({ queryKey: ["features"], queryFn: api.features });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["conversations"] });
-
   const createMutation = useMutation({
     mutationFn: api.createConversation,
     onSuccess: (created) => {

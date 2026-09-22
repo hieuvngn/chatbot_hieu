@@ -4,6 +4,7 @@ import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import AppLayout from "@/components/AppLayout";
 import RequireAuth from "@/components/RequireAuth";
 import { api } from "@/lib/api";
+import { SidebarProvider } from "@/lib/sidebar-context";
 import { WebToggleProvider } from "@/lib/web-toggle-context";
 import ChatPage from "./pages/ChatPage";
 import LoginPage from "./pages/LoginPage";
@@ -40,7 +41,9 @@ export default function App() {
         <Route
           element={
             <WebToggleProvider>
-              <AppLayout />
+              <SidebarProvider>
+                <AppLayout />
+              </SidebarProvider>
             </WebToggleProvider>
           }
         >

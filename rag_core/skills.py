@@ -16,11 +16,12 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 
 @dataclass(frozen=True)
 class Skill:
-    """Một skill: định danh, mô tả (cho selector) và instructions (cho generator)."""
+    """Một skill: định danh, mô tả, từ khóa chọn skill, và instructions."""
 
     name: str
     description: str
     instructions: str
+    keywords: tuple[str, ...] = ()
 
 
 def parse_skill_md(text: str) -> Skill | None:
@@ -41,10 +42,15 @@ def parse_skill_md(text: str) -> Skill | None:
             meta[key.strip()] = value.strip()
     name = meta.get("name", "")
     description = meta.get("description", "")
+    keywords = tuple(
+        kw.strip() for kw in meta.get("keywords", "").split(",") if kw.strip()
+    )
     instructions = "\n".join(lines[end + 1 :]).strip()
     if not name or not description or not instructions or "," in name:
         return None
-    return Skill(name=name, description=description, instructions=instructions)
+    return Skill(
+        name=name, description=description, instructions=instructions, keywords=keywords
+    )
 
 
 def load_skills(directory: Path) -> list[Skill]:

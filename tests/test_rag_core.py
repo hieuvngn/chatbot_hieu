@@ -101,6 +101,33 @@ class FakeGenerator:
         return f"Trả lời về {sources[0].document_title}: {first_sentence}. [1]"
 
 
+class UncitedGenerator:
+    """Draft without any [n] markers — exercises the answer-check path."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, list[Source]]] = []
+        self.feedbacks: list[str | None] = []
+        self.skill_prompts: list[str] = []
+        self.cite_on_regen = False
+
+    def generate(
+        self,
+        question: str,
+        chunks: list[Chunk],
+        feedback: str | None = None,
+        *,
+        skill_instructions: str = "",
+    ) -> str:
+        sources = [chunk.source for chunk in chunks]
+        self.calls.append((question, sources))
+        self.feedbacks.append(feedback)
+        self.skill_prompts.append(skill_instructions)
+        first_sentence = chunks[0].text.split(".")[0]
+        if feedback is not None and self.cite_on_regen:
+            return f"Trả lời về {sources[0].document_title}: {first_sentence}. [1]"
+        return f"Trả lời về {sources[0].document_title}: {first_sentence}."
+
+
 class FakeJudge:
     """Returns verdicts from a script; records every call."""
 
@@ -411,9 +438,12 @@ def test_not_high_after_refine_refuses_without_second_refine(tmp_path: Path) -> 
     assert len(rewriter.calls) == 1, "medium/low must trigger exactly one refine"
 
 
-def test_draft_answer_checked_claim_by_claim_against_sources(tmp_path: Path) -> None:
+def test_uncited_draft_checked_claim_by_claim_against_sources(tmp_path: Path) -> None:
+    # Draft without citations reaches the LLM checker (the cheap gate
+    # only skips drafts that already cite valid Sources).
     checker = FakeChecker(verdicts=[CheckVerdict(supported=True)])
-    generator = FakeGenerator()
+    generator = UncitedGenerator()
+    generator.cite_on_regen = True
     core, _ = make_core(tmp_path, generator=generator, checker=checker)
 
     result = core.answer("giải thích bảng băm là gì?", session())
@@ -430,6 +460,18 @@ def test_draft_answer_checked_claim_by_claim_against_sources(tmp_path: Path) -> 
     )
 
 
+def test_cited_draft_skips_llm_checker(tmp_path: Path) -> None:
+    # Cheap gate: a draft citing valid Sources is grounded — no second LLM pass.
+    checker = FakeChecker(verdicts=[CheckVerdict(supported=True)])
+    core, _ = make_core(tmp_path, checker=checker)
+
+    result = core.answer("giải thích bảng băm là gì?", session())
+
+    assert not result.refused
+    assert checker.calls == [], "a cited draft must not pay for a second LLM pass"
+    assert result.citations, "the cited draft keeps its Citations"
+
+
 def test_valid_answer_returned_unchanged_with_citations(tmp_path: Path) -> None:
     checker = FakeChecker(verdicts=[CheckVerdict(supported=True)])
     core, _ = make_core(tmp_path, checker=checker)
@@ -442,7 +484,6 @@ def test_valid_answer_returned_unchanged_with_citations(tmp_path: Path) -> None:
     for citation in result.citations:
         assert (citation.source.document_id, citation.source.chapter) in source_ids
 
-
 def test_unsupported_draft_triggers_exactly_one_regeneration_with_feedback(tmp_path: Path) -> None:
     feedback = "The claim 'X' is not supported by any cited source."
     checker = FakeChecker(
@@ -451,7 +492,7 @@ def test_unsupported_draft_triggers_exactly_one_regeneration_with_feedback(tmp_p
             CheckVerdict(supported=True),
         ]
     )
-    generator = FakeGenerator()
+    generator = UncitedGenerator()
     core, _ = make_core(tmp_path, generator=generator, checker=checker)
 
     result = core.answer("giải thích bảng băm là gì?", session())
@@ -472,7 +513,7 @@ def test_unsupported_draft_without_feedback_still_regenerates(tmp_path: Path) ->
     checker = FakeChecker(
         verdicts=[CheckVerdict(supported=False), CheckVerdict(supported=True)]
     )
-    generator = FakeGenerator()
+    generator = UncitedGenerator()
     core, _ = make_core(tmp_path, generator=generator, checker=checker)
 
     result = core.answer("giải thích bảng băm là gì?", session())
@@ -488,7 +529,7 @@ def test_second_failure_produces_refusal_with_rephrase_suggestion(tmp_path: Path
             CheckVerdict(supported=False, feedback="Claim 'X' is unsupported."),
         ]
     )
-    generator = FakeGenerator()
+    generator = UncitedGenerator()
     core, _ = make_core(tmp_path, generator=generator, checker=checker)
 
     result = core.answer("giải thích bảng băm là gì?", session())
@@ -503,9 +544,11 @@ def test_second_failure_produces_refusal_with_rephrase_suggestion(tmp_path: Path
 
 
 def test_answer_check_runs_after_judge_gate(tmp_path: Path) -> None:
+    # "bảng băm" scores below the cheap gate threshold, so the judge runs;
+    # the uncited draft then reaches the LLM checker.
     judge = FakeJudge(levels=["high"])
     checker = FakeChecker(verdicts=[CheckVerdict(supported=True)])
-    generator = FakeGenerator()
+    generator = UncitedGenerator()
     core, _ = make_core(
         tmp_path,
         generator=generator,
@@ -523,6 +566,26 @@ def test_answer_check_runs_after_judge_gate(tmp_path: Path) -> None:
     assert [c.source for c in checked_chunks] == [c.source for c in judge.calls[0][1]], (
         "the check must verify the answer against the judged top-5 Sources"
     )
+
+
+def test_retrieval_gate_skips_judge_for_strong_lexical_match(tmp_path: Path) -> None:
+    # "bảng băm cấu trúc dữ liệu" has a strong BM25 match (≥ gate
+    # threshold) — the LLM judge and its refine loop must be skipped.
+    judge = FakeJudge(levels=["high"])
+    generator = FakeGenerator()
+    core, _ = make_core(
+        tmp_path,
+        generator=generator,
+        judge=judge,
+        rewriter=FakeRewriter(),
+    )
+
+    result = core.answer("bảng băm cấu trúc dữ liệu", session())
+
+    assert not result.refused
+    assert judge.calls == [], "a strong lexical match must not pay for the LLM judge"
+    assert len(generator.calls) == 1
+    assert generator.calls[0][0] == "bảng băm cấu trúc dữ liệu"
 
 
 def test_judge_refusal_never_reaches_answer_check(tmp_path: Path) -> None:
@@ -607,7 +670,9 @@ def test_rewritten_query_flows_through_gated_pipeline(tmp_path: Path) -> None:
     result = core.answer("cho ví dụ", history)
 
     assert not result.refused
-    assert judge.calls[0][0] == "bảng băm cấu trúc dữ liệu"
+    # The rewritten query has a strong BM25 match, so the cheap retrieval
+    # gate skips the LLM judge and flows straight to generation.
+    assert judge.calls == []
     assert generator.calls[0][0] == "bảng băm cấu trúc dữ liệu"
 
 
@@ -839,7 +904,7 @@ def test_regeneration_reuses_same_skill_instructions(tmp_path: Path) -> None:
             CheckVerdict(supported=True),
         ]
     )
-    generator = FakeGenerator()
+    generator = UncitedGenerator()
     core, _ = make_core(
         tmp_path,
         generator=generator,

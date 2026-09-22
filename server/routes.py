@@ -3,21 +3,29 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from fastapi.params import Form
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from rag_core.models import ConversationMeta, Turn, User
+from rag_core import StreamDelta, StreamDone, StreamRefused, StreamStart
+from rag_core.models import AnswerResult, ConversationMeta, Turn, User
 from server.schemas import (
+    AttachmentContentOut,
     AttachmentOut,
+    AttachmentSectionOut,
     ChatIn,
     ConversationCreateIn,
     ConversationOut,
     ConversationRenameIn,
+    EntitiesOut,
+    EntityOut,
     FeaturesOut,
     ProfileIn,
     RegisterIn,
@@ -187,12 +195,170 @@ def chat(
     )
 
 
+def _ndjson_line(payload: dict[str, object]) -> bytes:
+    return (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+@router.post("/conversations/{conversation_id}/chat/stream")
+def chat_stream(
+    conversation_id: str, body: ChatIn, current_user: CurrentUser, state: StateDep
+) -> StreamingResponse:
+    """NDJSON streaming variant of /chat.
+
+    Emits one JSON object per line. Schema:
+      {"event": "start", "skills_applied": [...], "sources": [...]}
+      {"event": "token",  "delta": "..."}              # repeated per delta
+      {"event": "done",   "answer": "...", "citations": [...],
+       "sources": [...], "refused": bool,
+       "rephrase_suggestion": "...", "skills_applied": [...]}
+      {"event": "refused","rephrase_suggestion": "..."}
+      {"event": "error",  "detail": "..."}
+
+    The synchronous pre-stream pipeline (rewrite / classify / retrieve /
+    judge / refine / answer-check) runs server-side before the first line
+    ships, so the client only sees tokens from the final accepted answer.
+    """
+    _require_conversation(state, current_user, conversation_id)
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message must not be empty.")
+    session = state.db.get_session(conversation_id)
+
+    def stream() -> Iterator[bytes]:
+        skills_applied: list[str] = []
+        sources_payload: list[dict[str, object]] = []
+        accepted_result: AnswerResult | None = None
+        try:
+            for event in state.core.stream_answer(message, session, use_web=body.use_web):
+                if isinstance(event, StreamStart):
+                    skills_applied = list(event.skills_applied)
+                    sources_payload = [
+                        {
+                            "document_id": src.document_id,
+                            "document_title": src.document_title,
+                            "chapter": src.chapter,
+                            "course_code": src.course_code,
+                            "kind": src.kind,
+                            "language": src.language,
+                        }
+                        for src in event.sources
+                    ]
+                    yield _ndjson_line(
+                        {"event": "start", "skills_applied": skills_applied,
+                         "sources": sources_payload}
+                    )
+                elif isinstance(event, StreamDelta):
+                    yield _ndjson_line({"event": "token", "delta": event.delta})
+                elif isinstance(event, StreamDone):
+                    accepted_result = event.result
+                    yield _ndjson_line(
+                        {
+                            "event": "done",
+                            "answer": event.result.answer,
+                            "citations": [
+                                {"marker": c.marker,
+                                 "source": {
+                                     "document_id": c.source.document_id,
+                                     "document_title": c.source.document_title,
+                                     "chapter": c.source.chapter,
+                                     "course_code": c.source.course_code,
+                                     "kind": c.source.kind,
+                                     "language": c.source.language,
+                                 }}
+                                for c in event.result.citations
+                            ],
+                            "sources": sources_payload,
+                            "refused": event.result.refused,
+                            "rephrase_suggestion": event.result.rephrase_suggestion,
+                            "skills_applied": skills_applied,
+                        }
+                    )
+                elif isinstance(event, StreamRefused):
+                    yield _ndjson_line(
+                        {"event": "refused",
+                         "rephrase_suggestion": event.rephrase_suggestion}
+                    )
+        except Exception as exc:  # noqa: BLE001 — translate pipeline error to client
+            yield _ndjson_line({"event": "error", "detail": str(exc)})
+            return
+        if accepted_result is not None and not accepted_result.refused:
+            state.db.append_exchange(
+                conversation_id,
+                message,
+                accepted_result.answer,
+                citations=accepted_result.citations,
+                refused=accepted_result.refused,
+                rephrase_suggestion=accepted_result.rephrase_suggestion,
+                skills_applied=accepted_result.skills_applied,
+            )
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+
 @router.get("/features", response_model=FeaturesOut)
 def features(state: StateDep) -> FeaturesOut:
     return FeaturesOut(has_web_search=bool(state.core.has_web_search))
 
 
-def _attachment_conversation(db_path: Path, attachment_id: str) -> str | None:
+@router.get("/entities", response_model=EntitiesOut)
+def entities(state: StateDep) -> EntitiesOut:
+    """Return the full entity bundle so the UI can render citation cards."""
+    bundle = state.core.entities
+    return EntitiesOut(
+        departments=[
+            EntityOut(id=d.id, type="department", name=d.name, detail={"name_en": d.name_en})
+            for d in bundle.departments
+        ],
+        instructors=[
+            EntityOut(
+                id=i.id,
+                type="instructor",
+                name=i.name,
+                detail={
+                    "title": i.title,
+                    "email": i.email,
+                    "department_id": i.department_id,
+                    "courses": [{"course_code": c, "role": r} for c, r in i.courses],
+                },
+            )
+            for i in bundle.instructors
+        ],
+        programs=[
+            EntityOut(
+                id=p.id,
+                type="program",
+                name=p.name,
+                detail={
+                    "name_en": p.name_en,
+                    "department_id": p.department_id,
+                    "total_credits": p.total_credits,
+                    "required_courses": list(p.required_courses),
+                    "elective_courses": list(p.elective_courses),
+                },
+            )
+            for p in bundle.programs
+        ],
+        terms=[
+            EntityOut(
+                id=t.id,
+                type="term",
+                name=t.name,
+                detail={
+                    "year": t.year,
+                    "season": t.season,
+                    "start_date": t.start_date,
+                    "end_date": t.end_date,
+                    "offered": [
+                        {"course_code": c, "instructor_id": i, "schedule": s}
+                        for c, i, s in t.offered
+                    ],
+                },
+            )
+            for t in bundle.terms
+        ],
+    )
+
     with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
         row = conn.execute(
             "SELECT conversation_id FROM attachments WHERE id = ?", (attachment_id,)
@@ -241,3 +407,27 @@ def delete_attachment(attachment_id: str, current_user: CurrentUser, state: Stat
         state.attachments.delete(attachment_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Attachment not found.") from None
+
+@router.get("/attachments/{attachment_id}/content", response_model=AttachmentContentOut)
+def get_attachment_content(
+    attachment_id: str, current_user: CurrentUser, state: StateDep
+) -> AttachmentContentOut:
+    conversation_id = _attachment_conversation(state.db_path, attachment_id)
+    if conversation_id is None:
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+    _require_conversation(state, current_user, conversation_id)
+    try:
+        sections = state.attachments.get_content(attachment_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Attachment not found.") from None
+    return AttachmentContentOut(
+        sections=[AttachmentSectionOut(chapter=s.chapter, text=s.text) for s in sections]
+    )
+
+
+def _attachment_conversation(db_path: Path, attachment_id: str) -> str | None:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
+        row = conn.execute(
+            "SELECT conversation_id FROM attachments WHERE id = ?", (attachment_id,)
+        ).fetchone()
+    return str(row[0]) if row is not None else None

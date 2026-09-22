@@ -240,6 +240,37 @@ def test_delete_removes_chunks_and_metadata(tmp_path: Path) -> None:
     with pytest.raises(KeyError):
         store.delete(meta.id)
 
+def test_get_content_returns_sections_for_text_files(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    body = "# Chương 1\nNội dung một\n# Chương 2\nNội dung hai\n"
+    meta = store.add("conv1", "notes.md", body.encode())
+    sections = store.get_content(meta.id)
+    assert [s.chapter for s in sections] == ["Chương 1", "Chương 2"]
+    assert sections[0].text.startswith("Nội dung một")
+
+
+def test_get_content_returns_sections_for_pdf(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    pdf = _make_pdf([_text_stream("trang mot"), _text_stream("trang hai")])
+    meta = store.add("conv1", "slides.pdf", pdf)
+    sections = store.get_content(meta.id)
+    assert [s.chapter for s in sections] == ["Trang 1", "Trang 2"]
+    assert "trang mot" in sections[0].text
+
+
+def test_get_content_missing_raises_keyerror(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    with pytest.raises(KeyError):
+        store.get_content("does-not-exist")
+    store = make_store(tmp_path)
+    meta = store.add("conv1", "a.txt", "nội dung".encode())
+    store.delete(meta.id)
+    assert store.list_for("conv1") == []
+    assert store.load_chunks("conv1") == []
+    assert store.identity("conv1") == ()
+    with pytest.raises(KeyError):
+        store.delete(meta.id)
+
 
 def test_chunks_isolated_between_conversations(tmp_path: Path) -> None:
     store = make_store(tmp_path)

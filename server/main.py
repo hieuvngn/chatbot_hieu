@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import MutableMapping
+from collections.abc import AsyncIterator, MutableMapping
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +30,26 @@ class SPAStaticFiles(StaticFiles):
             return await super().get_response("index.html", scope)
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Pre-warm AppState at startup so the first request (login) is fast.
+
+    ``build_state()`` runs ``build_rag_core()`` which embeds the entire KB in a
+    single batched call (~minutes on cold start). Without this hook, the first
+    authenticated request pays the full cost. ``get_state`` keeps its lazy
+    fallback for tests that inject state directly.
+    """
+    from server.state import build_state
+
+    app.state.coursemate = build_state()
+    try:
+        yield
+    finally:
+        app.state.coursemate = None
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="CourseMate API")
+    app = FastAPI(title="CourseMate API", lifespan=_lifespan)
     app.include_router(router, prefix="/api")
     if WEB_DIST.is_dir():
         app.mount("/", SPAStaticFiles(directory=WEB_DIST, html=True), name="web")

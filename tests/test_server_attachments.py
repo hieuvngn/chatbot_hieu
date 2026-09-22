@@ -57,3 +57,38 @@ def test_upload_ownership(tmp_path: Path) -> None:
     assert stolen.status_code == 404
     listed = client.get("/api/attachments", params={"conversation_id": conv["id"]}, headers=h["bob"])
     assert listed.status_code == 404
+
+
+def test_get_content_endpoint_returns_sections(tmp_path: Path) -> None:
+    # pytest có thể tái sử dụng tmp_path qua các lần chạy, xoá app.db cũ nếu có
+    db_file = tmp_path / "app.db"
+    if db_file.exists():
+        db_file.unlink()
+    client, _, _, h = make_client(tmp_path)
+    conv = client.post("/api/conversations", json={}, headers=h["alice"]).json()
+    uploaded = _upload(
+        client, h["alice"], conv["id"], "notes.md",
+        b"# Chuong 1\nNoi dung A\n# Chuong 2\nNoi dung B\n",
+    ).json()
+    res = client.get(f"/api/attachments/{uploaded['id']}/content", headers=h["alice"])
+    assert res.status_code == 200
+    body = res.json()
+    assert [s["chapter"] for s in body["sections"]] == ["Chuong 1", "Chuong 2"]
+    assert body["sections"][0]["text"].startswith("Noi dung A")
+
+
+def test_get_content_endpoint_ownership_and_not_found(tmp_path: Path) -> None:
+    db_file = tmp_path / "app.db"
+    if db_file.exists():
+        db_file.unlink()
+    client, _, _, h = make_client(tmp_path)
+    conv = client.post("/api/conversations", json={}, headers=h["alice"]).json()
+    uploaded = _upload(client, h["alice"], conv["id"], "notes.txt", b"abc").json()
+    # Bob không sở hữu conversation → 404
+    assert client.get(
+        f"/api/attachments/{uploaded['id']}/content", headers=h["bob"]
+    ).status_code == 404
+    # Attachment không tồn tại → 404
+    assert client.get(
+        "/api/attachments/nope/content", headers=h["alice"]
+    ).status_code == 404

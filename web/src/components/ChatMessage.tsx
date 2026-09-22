@@ -1,6 +1,7 @@
 import { AlertTriangle, Info, Puzzle } from "lucide-react";
 import CitationCard from "./CitationCard";
 import Markdown from "./Markdown";
+import WebSearchResults from "./WebSearchResults";
 import type { Turn } from "@/lib/types";
 
 function isFallbackNotice(text: string): boolean {
@@ -33,35 +34,41 @@ export default function ChatMessage({ turn }: { turn: Turn }) {
   }
 
   const fallback = isFallbackNotice(turn.text) && turn.citations.length === 0;
+  const kbCitations = turn.citations.filter((c) => c.source.kind !== "web");
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {fallback && (
         <p className="flex items-start gap-1.5 text-xs text-blue-700 dark:text-blue-300">
           <Info size={13} className="mt-0.5 shrink-0" />
           Không tìm thấy tài liệu liên quan trong kho — trả lời theo hiểu biết chung (không có trích dẫn).
         </p>
       )}
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
-        <div className="min-w-0 flex-1 text-sm leading-relaxed text-zinc-800 dark:text-zinc-100">
-          <Markdown text={turn.text} />
-          {turn.skills_applied.length > 0 && (
-            <p className="mt-2 flex flex-wrap items-center gap-1 text-[11px] text-zinc-400">
-              <Puzzle size={11} />
-              {turn.skills_applied.join(", ")}
-            </p>
-          )}
-        </div>
-        {turn.citations.length > 0 && (
-          <div className="flex w-full shrink-0 flex-row gap-2 overflow-x-auto lg:w-56 lg:flex-col lg:overflow-visible">
-            {turn.citations.map((citation) => (
-              <div key={citation.marker} className="w-48 shrink-0 lg:w-full">
-                <CitationCard citation={citation} />
-              </div>
-            ))}
-          </div>
+      <div className="text-sm leading-relaxed text-zinc-800 dark:text-zinc-100">
+        <Markdown text={turn.text} />
+        {turn.skills_applied.length > 0 && (
+          <p className="mt-2 flex flex-wrap items-center gap-1 text-[11px] text-zinc-400">
+            <Puzzle size={11} />
+            {turn.skills_applied.join(", ")}
+          </p>
         )}
       </div>
+      <WebSearchResults citations={turn.citations} />
+      {kbCitations.length > 0 && (
+        <section className="space-y-1.5">
+          <header className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+            <Puzzle size={11} />
+            <span>Tài liệu tham khảo ({kbCitations.length})</span>
+          </header>
+          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {kbCitations.map((citation) => (
+              <li key={citation.marker}>
+                <CitationCard citation={citation} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

@@ -30,11 +30,22 @@ class OpenRouterEmbedder:
         self._model = model
         self.dim = dim
 
+    # OpenRouter's free-tier embedding models cap a single batch at ~256 inputs.
+    # Chunk transparently so larger indexes can be embedded without callers
+    # having to know the upstream limit.
+    MAX_BATCH_SIZE = 256
+
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        response = self._client.embeddings.create(
-            model=self._model, input=texts, encoding_format="float"
-        )
-        return [item.embedding for item in response.data]
+        if not texts:
+            return []
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self.MAX_BATCH_SIZE):
+            chunk = texts[start : start + self.MAX_BATCH_SIZE]
+            response = self._client.embeddings.create(
+                model=self._model, input=chunk, encoding_format="float"
+            )
+            vectors.extend(item.embedding for item in response.data)
+        return vectors
 
     def embed_query(self, text: str) -> list[float]:
         return self.embed_batch([text])[0]

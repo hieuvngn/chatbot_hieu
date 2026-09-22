@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api, setToken } from "@/lib/api";
 
+const DEMO_CREDENTIALS = { username: "hieu", password: "demo-password" } as const;
+
 export default function LoginPage() {
   const navigate = useNavigate();
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -11,6 +13,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+
+  function useDemo(): void {
+    setMode("login");
+    setUsername(DEMO_CREDENTIALS.username);
+    setPassword(DEMO_CREDENTIALS.password);
+    setError(null);
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -54,6 +63,25 @@ export default function LoginPage() {
               {tab === "login" ? "Đăng nhập" : "Đăng ký"}
             </button>
           ))}
+        </div>
+
+        <div className="mt-4 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900/50 dark:text-zinc-400">
+          <p className="font-medium text-zinc-700 dark:text-zinc-300">
+            Tài khoản demo:{" "}
+            <button
+              type="button"
+              onClick={useDemo}
+              className="font-mono underline-offset-2 hover:underline"
+              title="Điền vào form đăng nhập"
+            >
+              hieu / demo-password
+            </button>
+          </p>
+          <p className="mt-0.5 text-[11px] leading-snug text-zinc-500 dark:text-zinc-500">
+            Chạy <code className="font-mono">uv run python -m demo_memory</code>
+            {" "}để tạo user này trên <code className="font-mono">data/demo.db</code>,
+            {" "}hoặc bấm <strong>Đăng ký</strong> để tạo tài khoản mới.
+          </p>
         </div>
 
         <form onSubmit={submit} className="mt-6 space-y-4">

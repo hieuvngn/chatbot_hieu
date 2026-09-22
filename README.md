@@ -35,14 +35,20 @@ The script writes two JSON files into the output directory:
   - `semester` — semester in which the course is offered (1–8)
   - `department` — offering department
   - `instructor` — assigned instructor
-  - `description` — a one-paragraph syllabus summary
 - `documents.json` — the study-material corpus, a list of 40 documents (slides and textbook chapters) split between Vietnamese and English. Each object has:
   - `id` — unique document id (e.g. `DOC-001`)
   - `course_code` — the course this material belongs to
   - `title` — document title
-  - `kind` — `slides` or `textbook`
+  - `kind` — `slides` or `textbook` (or `exam` / `lab_guide` / `cheatsheet` / `faq` for the extra kinds produced by `--extra-documents`)
   - `language` — `vi` or `en`
   - `chapters` — list of chapters/sections, each with an `id`, `title`, and `content` referencing the course and its topics
+
+The generator also emits four **entity tables** alongside the corpus (see `generate_entities.py`):
+
+- `departments.json` — academic departments (`CNTT`, `MATH`, `GE`).
+- `instructors.json` — staff roster; each entry lists the courses they teach and a bio.
+- `programs.json` — curricula grouping courses into required + elective tracks (`PR-CNTT`, `PR-AI`, `PR-DS`).
+- `terms.json` — specific semester offerings (`T-2025-S1`, `T-2025-S2`, `T-2026-S1`) with the courses that term runs and which instructor teaches them.
 
 ### Data integrity
 
@@ -86,10 +92,12 @@ for citation in result.citations:
 
 ## CRAG judge
 
-Between retrieval and generation, the quality gate decides whether the retrieved top-5 Sources are trustworthy enough to answer from. An LLM judge scores them high / medium / low:
+Between retrieval and generation, the quality gate decides whether the retrieved top-5 Sources are trustworthy enough to answer from:
 
-- **high** — the sources directly answer the question; the pipeline answers from them as-is.
-- **medium / low** — the pipeline Refines exactly once: a query rewrite (exact keywords, pronouns dropped) followed by a full re-retrieval. If the judge is still not high after that single refine, the pipeline refuses with a rephrase suggestion.
+- **Cheap gate first** — if the query has a strong BM25 match against the corpus (score ≥ `RETRIEVAL_GATE_THRESHOLD` in `rag_core/index.py`), retrieval is trusted and the answer is generated straight away: no judge call at all.
+- Otherwise an LLM judge scores the sources high / medium / low:
+  - **high** — the sources directly answer the question; the pipeline answers from them as-is.
+  - **medium / low** — the pipeline Refines exactly once: a query rewrite (exact keywords, pronouns dropped) followed by a full re-retrieval. If the judge is still not high after that single refine, the pipeline refuses with a rephrase suggestion.
 - A refusal returns an empty answer with no Citations and never calls the generator — no hallucinated or unsupported answer is ever served.
 
 The `AnswerResult` carries two extra fields when it refuses: `refused=True` and a `rephrase_suggestion`. `build_rag_core()` wires the judge and rewriter in automatically.
@@ -111,7 +119,7 @@ When local retrieval is judged insufficient even after its single Refine, the pi
 
 ## Answer check
 
-After generation, the generation-side quality gate verifies the draft answer claim-by-claim against the cited Sources. An LLM verifier checks that every claim is supported by a cited Source; if any claim is unsupported, the pipeline regenerates exactly once with concrete feedback naming the unsupported claims. If the regenerated answer still fails the check, the pipeline refuses with a rephrase suggestion — never serving an unverified answer. A valid answer passes through unchanged with its Citations intact. `build_rag_core()` wires the verifier in automatically.
+After generation, the generation-side quality gate verifies the draft answer. First a cheap gate: a draft that already cites valid Sources is grounded evidence — it passes through unchanged with its Citations intact, no second LLM call. Only a draft with no Citations is checked claim-by-claim against the cited Sources by an LLM verifier; if any claim is unsupported, the pipeline regenerates exactly once with concrete feedback naming the unsupported claims. If the regenerated answer still fails the check, the pipeline refuses with a rephrase suggestion — never serving an unverified answer. `build_rag_core()` wires the verifier in automatically.
 
 ### Demo script
 
@@ -188,3 +196,13 @@ Options:
 - `--retrieval-only` — skip generation and report only retrieval hit@5.
 
 The eval set targets the seeded dataset: regenerate the data with `uv run python -m generate_data --seed 42` so the ground-truth document/chapter references stay valid (the test suite asserts this).
+
+## CI/CD
+
+Automated tests run on every push and pull request via GitHub Actions:
+
+- **Python tests** — unit + integration on Python 3.11, 3.12, 3.13 (mypy included)
+- **System tests** — run with `OPENROUTER_API_KEY` secret (optional)
+- **Web build** — TypeScript typecheck, lint, production build
+
+See `.github/workflows/ci.yml` for the full configuration.

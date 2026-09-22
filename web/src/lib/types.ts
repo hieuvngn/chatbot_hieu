@@ -12,6 +12,8 @@ export interface Source {
   course_code: string;
   kind: string;
   language: string;
+  entity_type?: string;
+  entity_id?: string;
 }
 
 export interface Citation {
@@ -30,6 +32,7 @@ export interface Turn {
 
 export interface ConversationMeta {
   id: string;
+  user_id: number;
   title: string;
   created_at: string;
   updated_at: string;
@@ -48,4 +51,27 @@ export interface Attachment {
 
 export interface Features {
   has_web_search: boolean;
+}
+
+export interface EntityDetail {
+  [key: string]:
+    | string
+    | number
+    | boolean
+    | EntityDetail[]
+    | { [k: string]: string | number | boolean };
+}
+
+export interface Entity {
+  id: string;
+  type: string;
+  name: string;
+  detail: EntityDetail;
+}
+
+export interface EntityBundle {
+  departments: Entity[];
+  instructors: Entity[];
+  programs: Entity[];
+  terms: Entity[];
 }

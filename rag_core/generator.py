@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from typing import Protocol
+from collections.abc import Iterator
+from typing import Any, Protocol, cast
 
 from rag_core.config import DEFAULT_BASE_URL, DEFAULT_LLM_MODEL
 from rag_core.models import Chunk, Citation, Source
@@ -35,7 +36,6 @@ def numbered_sources(chunks: list[Chunk]) -> str:
         for i, chunk in enumerate(chunks, start=1)
     )
 
-
 class Generator(Protocol):
     def generate(
         self,
@@ -45,6 +45,18 @@ class Generator(Protocol):
         *,
         skill_instructions: str = "",
     ) -> str: ...
+
+    def stream(
+        self,
+        question: str,
+        chunks: list[Chunk],
+        feedback: str | None = None,
+        *,
+        skill_instructions: str = "",
+    ) -> Iterator[str]:
+        """Yield token deltas for the final accepted answer; assemble locally
+        for the answer-check path."""
+        ...
 
 
 class OpenRouterGenerator:
@@ -59,14 +71,13 @@ class OpenRouterGenerator:
         self._client = OpenAI(api_key=api_key, base_url=base_url)
         self._model = model
 
-    def generate(
+    def _build_messages(
         self,
         question: str,
         chunks: list[Chunk],
-        feedback: str | None = None,
-        *,
-        skill_instructions: str = "",
-    ) -> str:
+        feedback: str | None,
+        skill_instructions: str,
+    ) -> list[dict[str, str]]:
         numbered = numbered_sources(chunks)
         user_prompt = (
             f"Sources:\n{numbered}\n\n"
@@ -83,14 +94,47 @@ class OpenRouterGenerator:
             system_prompt += (
                 "\n\nAdditional instructions from active skills:\n" + skill_instructions
             )
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+    def generate(
+        self,
+        question: str,
+        chunks: list[Chunk],
+        feedback: str | None = None,
+        *,
+        skill_instructions: str = "",
+    ) -> str:
         response = self._client.chat.completions.create(
             model=self._model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=cast(Any, self._build_messages(question, chunks, feedback, skill_instructions)),
         )
         return response.choices[0].message.content or ""
+
+    def stream(
+        self,
+        question: str,
+        chunks: list[Chunk],
+        feedback: str | None = None,
+        *,
+        skill_instructions: str = "",
+    ) -> Iterator[str]:
+        stream = self._client.chat.completions.create(
+            model=self._model,
+            messages=cast(Any, self._build_messages(question, chunks, feedback, skill_instructions)),
+            stream=True,
+        )
+        for chunk in stream:
+            # OpenRouter/OpenAI streaming responses include error tuples on
+            # failure; only ChatCompletionChunk objects carry the .choices list.
+            if not hasattr(chunk, "choices"):
+                continue
+            for choice in chunk.choices:
+                delta = choice.delta.content
+                if delta:
+                    yield delta
 
     def generate_fallback(self, question: str) -> str:
         response = self._client.chat.completions.create(

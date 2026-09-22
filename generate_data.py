@@ -10,6 +10,10 @@ from typing import Iterator, Sequence
 SEED = 42
 NUM_COURSES = 50
 NUM_DOCUMENTS = 40
+BASE_DOCUMENT_KINDS: tuple[str, ...] = ("slides", "textbook")
+EXTRA_DOCUMENT_KINDS: tuple[str, ...] = ("exam", "lab_guide", "cheatsheet", "faq")
+ALL_DOCUMENT_KINDS: tuple[str, ...] = BASE_DOCUMENT_KINDS + EXTRA_DOCUMENT_KINDS
+VIETNAMESE_RATIO_FOR_EXTRA = 0.7
 DATA_DIR = Path(__file__).parent / "data"
 
 INSTRUCTORS = [
@@ -373,7 +377,327 @@ f"The section closes with step-by-step examples and practice problems so student
         )
 
 
-def _intro_section(language: str, course: Course, kind: str) -> str:
+
+def _intro_for_kind(language: str, course: Course, kind: str) -> str:
+    if kind in {"slides", "textbook"}:
+        return _intro_section_legacy(language, course, kind)
+    if kind == "exam":
+        return _intro_exam(language, course)
+    if kind == "lab_guide":
+        return _intro_lab_guide(language, course)
+    if kind == "cheatsheet":
+        return _intro_cheatsheet(language, course)
+    if kind == "faq":
+        return _intro_faq(language, course)
+    return _intro_section_legacy(language, course, kind)
+
+
+def _summary_for_kind(
+    language: str, course: Course, kind: str, topics: list[tuple[str, str]]
+) -> str:
+    if kind in {"slides", "textbook"}:
+        return _summary_section(language, course, topics)
+    if kind == "exam":
+        return _summary_exam(language, course, topics)
+    if kind == "lab_guide":
+        return _summary_lab_guide(language, course, topics)
+    if kind == "cheatsheet":
+        return _summary_cheatsheet(language, course, topics)
+    if kind == "faq":
+        return _summary_faq(language, course, topics)
+    return _summary_section(language, course, topics)
+
+
+def _section_content_for_kind(
+    kind: str,
+    topic_vi: str,
+    topic_en: str,
+    language: str,
+    course: Course,
+    index: int,
+) -> str:
+    if kind in {"slides", "textbook"}:
+        return _section_content(topic_vi, topic_en, language, course, index)
+    if kind == "exam":
+        return _section_exam(topic_vi, topic_en, language, course, index)
+    if kind == "lab_guide":
+        return _section_lab_guide(topic_vi, topic_en, language, course, index)
+    if kind == "cheatsheet":
+        return _section_cheatsheet(topic_vi, topic_en, language, course, index)
+    if kind == "faq":
+        return _section_faq(topic_vi, topic_en, language, course, index)
+    return _section_content(topic_vi, topic_en, language, course, index)
+
+
+def _intro_exam(language: str, course: Course) -> str:
+    if language == "vi":
+        return (
+            f"Đề thi mẫu này thuộc môn {course.name} ({course.code}) của "
+            f"{course.department}, dành cho sinh viên đã hoàn thành phần lý thuyết "
+            f"của học phần. Đề gồm các câu hỏi trắc nghiệm và tự luận kèm đáp án "
+            f"chi tiết, bám sát các chủ đề quan trọng nhất.\n\n"
+            f"Thời gian làm bài đề xuất là chín mươi phút cho toàn bộ đề; sinh viên "
+            f"có thể dành khoảng hai mươi phút để đọc lướt và phân bổ thời gian cho "
+            f"từng phần. Cấu trúc đề gồm hai phần chính: phần trắc nghiệm kiểm tra "
+            f"khả năng nhớ và phân biệt khái niệm, phần tự luận kiểm tra khả năng "
+            f"vận dụng và lập luận. Đáp án chi tiết ở cuối tài liệu giúp sinh viên "
+            f"tự đánh giá và ôn lại những điểm còn yếu.\n\n"
+            f"Cách sử dụng hiệu quả nhất là làm bài trong điều kiện không có tài "
+            f"liệu, sau đó so sánh với đáp án và ghi lại những lỗi sai phổ biến. "
+            f"Những lỗi này thường xuất hiện lặp lại trong các kỳ thi, vì vậy sinh "
+            f"viên nên phân tích kỹ từng câu sai thay vì chỉ xem đáp án."
+        )
+    return (
+        f"This sample exam belongs to {course.name_en} ({course.code}), offered by "
+        f"{course.department}, for students who have completed the theoretical "
+        f"part of the module. The paper contains multiple-choice and written "
+        f"questions with detailed solutions, focused on the most important topics.\n\n"
+        f"Recommended time is ninety minutes for the whole paper; students should "
+        f"budget roughly twenty minutes for a quick read-through and time planning. "
+        f"The paper has two main parts: multiple-choice items test recall and "
+        f"concept discrimination, while the written section tests application and "
+        f"reasoning. Detailed solutions at the end of this material let students "
+        f"self-assess and revisit the topics they missed.\n\n"
+        f"The most effective way to use this paper is to attempt it under timed "
+        f"conditions without consulting the material, then compare your answers "
+        f"with the solutions and write down the recurring mistakes."
+    )
+
+
+def _intro_lab_guide(language: str, course: Course) -> str:
+    if language == "vi":
+        return (
+            f"Hướng dẫn thực hành này thuộc môn {course.name} ({course.code}) của "
+            f"{course.department}, dành cho buổi lab trên lớp. Mỗi bài gồm mục "
+            f"tiêu, dữ liệu đầu vào, các bước thực hiện và kết quả mong đợi.\n\n"
+            f"Trước mỗi buổi lab, sinh viên cần đọc trước phần mục tiêu và chuẩn "
+            f"bị môi trường lập trình theo hướng dẫn ở đầu tài liệu. Trong buổi "
+            f"lab, nên làm theo từng bước một và ghi lại kết quả trung gian để "
+            f"so sánh với kết quả mong đợi. Sau buổi lab, sinh viên hoàn thành "
+            f"phần bài tập mở rộng ở cuối mỗi bài và nộp lại cho giảng viên theo hạn."
+        )
+    return (
+        f"This lab guide belongs to {course.name_en} ({course.code}), offered by "
+        f"{course.department}, for in-class lab sessions. Each exercise lists "
+        f"objectives, input data, step-by-step instructions, and the expected "
+        f"output.\n\n"
+        f"Before each session, read the objectives and set up the programming "
+        f"environment as described in the front matter. During the session, follow "
+        f"the steps in order and record intermediate results so you can compare "
+        f"them against the expected output. After the session, complete the "
+        f"extension tasks at the end of each exercise and submit them by the "
+        f"stated deadline."
+    )
+
+
+def _intro_cheatsheet(language: str, course: Course) -> str:
+    if language == "vi":
+        return (
+            f"Bảng tóm tắt nhanh này dành cho môn {course.name} ({course.code}), "
+            f"tổng hợp các công thức, khái niệm và lưu ý quan trọng nhất của "
+            f"học phần trên một vài trang. Sinh viên có thể in ra và dùng để ôn "
+            f"nhanh trước kỳ thi hoặc khi cần tra cứu khi làm bài tập.\n\n"
+            f"Bảng tóm tắt này là điểm khởi đầu, không thay thế cho việc đọc kỹ "
+            f"từng phần trong tài liệu chính."
+        )
+    return (
+        f"This cheatsheet summarises the most important formulas, concepts, and "
+        f"caveats of {course.name_en} ({course.code}) onto a few pages. Students "
+        f"can print it for quick revision before the exam or keep it nearby when "
+        f"working through exercises.\n\n"
+        f"This cheatsheet is a starting point and does not replace reading the "
+        f"main material carefully."
+    )
+
+
+def _intro_faq(language: str, course: Course) -> str:
+    if language == "vi":
+        return (
+            f"Hỏi đáp thường gặp này tổng hợp các câu hỏi mà sinh viên hay hỏi "
+            f"về môn {course.name} ({course.code}), gồm cả câu hỏi về nội dung, "
+            f"cách học và tổ chức lớp. Trước khi gửi email cho giảng viên hoặc "
+            f"trợ giảng, sinh viên nên đọc qua FAQ này; phần lớn câu hỏi về đề "
+            f"cương, tiêu chí chấm điểm và thời hạn nộp bài đều đã được trả lời "
+            f"ở đây."
+        )
+    return (
+        f"This FAQ collects the questions students most often ask about "
+        f"{course.name_en} ({course.code}), covering content, study methods, and "
+        f"course organisation. Before emailing the instructor or teaching "
+        f"assistant, please skim this FAQ first; most questions about syllabus, "
+        f"grading, and deadlines are already covered here."
+    )
+
+
+def _summary_exam(language: str, course: Course, topics: list[tuple[str, str]]) -> str:
+    names = ", ".join(t for t, _ in topics[:3])
+    if language == "vi":
+        return (
+            f"Tóm tắt đề thi mẫu cho môn {course.name} ({course.code}): các câu "
+            f"hỏi xoay quanh {names}. Sinh viên nên luyện làm đề trong điều kiện "
+            f"giới hạn thời gian và so sánh kỹ với đáp án ở cuối tài liệu."
+        )
+    en_names = ", ".join(t for _, t in topics[:3])
+    return (
+        f"This sample exam summary for {course.name_en} ({course.code}) covers "
+        f"{en_names}. Students should attempt the paper under timed conditions "
+        f"and compare their answers against the solutions at the end."
+    )
+
+
+def _summary_lab_guide(language: str, course: Course, topics: list[tuple[str, str]]) -> str:
+    names = ", ".join(t for t, _ in topics[:3])
+    if language == "vi":
+        return (
+            f"Hoàn thành các bài lab về {names} giúp sinh viên làm quen với "
+            f"công cụ thực tế của môn {course.name} ({course.code}). Hãy lưu lại "
+            f"kết quả từng bước để đối chiếu với kết quả mong đợi khi debug."
+        )
+    en_names = ", ".join(t for _, t in topics[:3])
+    return (
+        f"Completing the labs on {en_names} builds hands-on familiarity with "
+        f"the tools used in {course.name_en} ({course.code}). Record each "
+        f"intermediate result so you can compare it against the expected output "
+        f"when debugging."
+    )
+
+
+def _summary_cheatsheet(language: str, course: Course, topics: list[tuple[str, str]]) -> str:
+    names = ", ".join(t for t, _ in topics[:3])
+    if language == "vi":
+        return (
+            f"Bảng tóm tắt nhanh của môn {course.name} ({course.code}) bao gồm "
+            f"các công thức và lưu ý quan trọng nhất về {names}. Dùng để ôn "
+            f"nhanh trước kỳ thi."
+        )
+    en_names = ", ".join(t for _, t in topics[:3])
+    return (
+        f"This cheatsheet for {course.name_en} ({course.code}) lists the most "
+        f"important formulas and caveats about {en_names}. Use it for a quick "
+        f"revision before the exam."
+    )
+
+
+def _summary_faq(language: str, course: Course, topics: list[tuple[str, str]]) -> str:
+    names = ", ".join(t for t, _ in topics[:3])
+    if language == "vi":
+        return (
+            f"FAQ của môn {course.name} ({course.code}) gồm các câu hỏi thường "
+            f"gặp xoay quanh {names}. Đọc qua FAQ trước khi gửi email cho giảng "
+            f"viên giúp tiết kiệm thời gian cho cả hai phía."
+        )
+    en_names = ", ".join(t for _, t in topics[:3])
+    return (
+        f"The FAQ for {course.name_en} ({course.code}) answers the most common "
+        f"questions about {en_names}. Reading it before emailing the instructor "
+        f"saves time for both sides."
+    )
+
+
+def _section_exam(topic_vi: str, topic_en: str, language: str, course: Course, index: int) -> str:
+    if language == "vi":
+        return (
+            f"Câu hỏi {index} (phần {topic_vi}):\n\n"
+            f"a) Định nghĩa {topic_vi} và nêu một ví dụ áp dụng trong môn "
+            f"{course.name} ({course.code}).\n"
+            f"b) Phân tích độ phức tạp trong trường hợp xấu nhất.\n"
+            f"c) So sánh {topic_vi} với một kỹ thuật liên quan đã học.\n\n"
+            f"Đáp án gợi ý:\n"
+            f"- Phần a: nêu định nghĩa ngắn gọn và một ví dụ cụ thể.\n"
+            f"- Phần b: tính toán dựa trên giả định đầu vào.\n"
+            f"- Phần c: liệt kê hai điểm giống và hai điểm khác biệt."
+        )
+    return (
+        f"Question {index} (topic {topic_en}):\n\n"
+        f"a) Define {topic_en} and give one example applied to "
+        f"{course.name_en} ({course.code}).\n"
+        f"b) Analyse the worst-case complexity.\n"
+        f"c) Compare {topic_en} with a related technique covered earlier.\n\n"
+        f"Hint solutions:\n"
+        f"- (a) Provide a concise definition and a concrete example.\n"
+        f"- (b) Reason under explicit input assumptions.\n"
+        f"- (c) List two similarities and two differences."
+    )
+
+
+def _section_lab_guide(topic_vi: str, topic_en: str, language: str, course: Course, index: int) -> str:
+    if language == "vi":
+        return (
+            f"Bài lab {index}: Áp dụng {topic_vi} trong môn {course.name} "
+            f"({course.code}).\n\n"
+            f"Mục tiêu: cài đặt và chạy thử một chương trình minh họa cho "
+            f"{topic_vi}.\n\n"
+            f"Các bước thực hiện:\n"
+            f"1. Tạo project mới và cài đặt môi trường.\n"
+            f"2. Cài đặt hàm xử lý liên quan đến {topic_vi}.\n"
+            f"3. Chạy với dữ liệu mẫu và ghi lại kết quả.\n"
+            f"4. So sánh với kết quả mong đợi ở cuối bài.\n\n"
+            f"Kết quả mong đợi: chương trình in ra đầu ra đúng với dữ liệu mẫu.\n\n"
+            f"Bài tập mở rộng: thay đổi dữ liệu đầu vào và quan sát sự thay đổi "
+            f"của kết quả; viết một báo cáo ngắn giải thích."
+        )
+    return (
+        f"Lab {index}: Applying {topic_en} in {course.name_en} ({course.code}).\n\n"
+        f"Objective: implement and run a small program that illustrates "
+        f"{topic_en}.\n\n"
+        f"Steps:\n"
+        f"1. Create a new project and set up the environment.\n"
+        f"2. Implement the function that handles {topic_en}.\n"
+        f"3. Run the program on the sample input and record the output.\n"
+        f"4. Compare with the expected output at the end of the exercise.\n\n"
+        f"Expected output: the program prints the correct result for the sample "
+        f"input.\n\n"
+        f"Extension: change the input and observe how the output evolves; write a "
+        f"short report explaining your observations."
+    )
+
+
+def _section_cheatsheet(topic_vi: str, topic_en: str, language: str, course: Course, index: int) -> str:
+    if language == "vi":
+        return (
+            f"Mục {index}: {topic_vi}.\n\n"
+            f"- Định nghĩa ngắn: ghi một dòng về {topic_vi}.\n"
+            f"- Công thức chính: liệt kê ký hiệu thường gặp.\n"
+            f"- Lưu ý: nhắc lại điều kiện áp dụng và lỗi sai thường gặp.\n"
+            f"- Tham chiếu: phần tương ứng trong tài liệu chính của môn "
+            f"{course.name} ({course.code})."
+        )
+    return (
+        f"Item {index}: {topic_en}.\n\n"
+        f"- One-line definition of {topic_en}.\n"
+        f"- Key formulas: list the common notations.\n"
+        f"- Caveats: applicability conditions and common mistakes.\n"
+        f"- Reference: the corresponding section in the main material of "
+        f"{course.name_en} ({course.code})."
+    )
+
+
+def _section_faq(topic_vi: str, topic_en: str, language: str, course: Course, index: int) -> str:
+    if language == "vi":
+        return (
+            f"Câu hỏi FAQ {index}: liên quan đến {topic_vi} trong môn "
+            f"{course.name} ({course.code}).\n\n"
+            f"Q: {topic_vi} thường gây nhầm lẫn ở điểm nào?\n"
+            f"A: Phần lớn sinh viên nhầm lẫn giữa điều kiện áp dụng và trường "
+            f"hợp biên. Nên đọc kỹ phần định nghĩa trong tài liệu chính trước "
+            f"khi làm bài tập.\n\n"
+            f"Q: Tài liệu nào nên đọc thêm về {topic_vi}?\n"
+            f"A: Phần tương ứng trong tài liệu chính của học phần và chương sách "
+            f"giáo trình được trích dẫn trong phần đọc thêm."
+        )
+    return (
+        f"FAQ {index}: about {topic_en} in {course.name_en} ({course.code}).\n\n"
+        f"Q: Where does {topic_en} usually cause confusion?\n"
+        f"A: Most students confuse the applicability conditions with the edge "
+        f"cases. Read the definition section in the main material carefully "
+        f"before attempting the exercises.\n\n"
+        f"Q: Which extra material covers {topic_en}?\n"
+        f"A: The corresponding section in the main material and the textbook "
+        f"chapter listed in the reading list."
+    )
+
+
+def _intro_section_legacy(language: str, course: Course, kind: str) -> str:
     label_vi = "slide" if kind == "slides" else "chương"
     label_en = "slide" if kind == "slides" else "chapter"
     if language == "vi":
@@ -531,57 +855,225 @@ def _summary_section(language: str, course: Course, topics: list[tuple[str, str]
     )
 
 
-def _document_for_course(rng: random.Random, course: Course, kind: str, language: str, doc_id: str) -> Document:
+def _document_title(language: str, course: Course, kind: str) -> str:
+    vi_map = {
+        "slides": "Bài giảng",
+        "textbook": "Chương trình học",
+        "exam": "Đề thi mẫu",
+        "lab_guide": "Hướng dẫn thực hành",
+        "cheatsheet": "Bảng tóm tắt nhanh",
+        "faq": "Hỏi đáp thường gặp",
+    }
+    en_map = {
+        "slides": "Lecture",
+        "textbook": "Study Material",
+        "exam": "Sample Exam",
+        "lab_guide": "Lab Guide",
+        "cheatsheet": "Cheatsheet",
+        "faq": "FAQ",
+    }
+    if language == "vi":
+        label = vi_map.get(kind, kind)
+        return f"{label}: {course.name} ({course.code})"
+    label = en_map.get(kind, kind)
+    return f"{label}: {course.name_en} ({course.code})"
+
+
+def _intro_title(language: str) -> str:
+    return "Giới thiệu" if language == "vi" else "Introduction"
+
+
+def _section_title(language: str, index: int, topic_title: str) -> str:
+    if language == "vi":
+        return f"Phần {index}: {topic_title}"
+    return f"Section {index}: {topic_title}"
+
+
+def _summary_title(language: str) -> str:
+    return "Tóm tắt" if language == "vi" else "Summary"
+
+
+def _maybe_rewrite(
+    content: str,
+    kind: str,
+    language: str,
+    course: Course,
+    llm_client: _LLMClient | None,
+) -> str:
+    if llm_client is None:
+        return content
+    if kind not in EXTRA_DOCUMENT_KINDS:
+        return content
+    try:
+        rewritten = llm_client.rewrite_section(content, kind, language, course)
+    except Exception:
+        return content
+    return rewritten if rewritten else content
+
+
+def _document_for_course(
+    rng: random.Random,
+    course: Course,
+    kind: str,
+    language: str,
+    doc_id: str,
+    llm_client: _LLMClient | None = None,
+) -> Document:
     topics = list(TOPICS[course.code])
     rng.shuffle(topics)
     num_topics = rng.randint(2, min(4, len(topics)))
     selected = topics[:num_topics]
 
-    if language == "vi":
-        type_label = "Bài giảng" if kind == "slides" else "Chương trình học"
-        title = f"{type_label}: {course.name} ({course.code})"
-    else:
-        type_label = "Lecture" if kind == "slides" else "Study Material"
-        title = f"{type_label}: {course.name_en} ({course.code})"
-
-    chapters = [Chapter(id=f"{doc_id}-c1", title="Giới thiệu" if language == "vi" else "Introduction",
-                        content=_intro_section(language, course, kind))]
+    title = _document_title(language, course, kind)
+    intro_text = _maybe_rewrite(
+        _intro_for_kind(language, course, kind), kind, language, course, llm_client
+    )
+    chapters = [
+        Chapter(
+            id=f"{doc_id}-c1",
+            title=_intro_title(language),
+            content=intro_text,
+        )
+    ]
     for i, (tvi, ten) in enumerate(selected, start=2):
         topic_title = tvi if language == "vi" else ten
         chapters.append(
-            Chapter(id=f"{doc_id}-c{i}",
-                    title=f"Phần {i - 1}: {topic_title}" if language == "vi" else f"Section {i - 1}: {topic_title}",
-                    content=_section_content(tvi, ten, language, course, i - 1))
+            Chapter(
+                id=f"{doc_id}-c{i}",
+                title=_section_title(language, i - 1, topic_title),
+                content=_section_content_for_kind(
+                    kind, tvi, ten, language, course, i - 1
+                ),
+            )
         )
-    chapters.append(
-        Chapter(id=f"{doc_id}-c{len(chapters) + 1}",
-                title="Tóm tắt" if language == "vi" else "Summary",
-                content=_summary_section(language, course, selected))
+    summary_text = _maybe_rewrite(
+        _summary_for_kind(language, course, kind, selected),
+        kind,
+        language,
+        course,
+        llm_client,
     )
-    return Document(id=doc_id, course_code=course.code, title=title, kind=kind, language=language,
-                    chapters=chapters)
+    chapters.append(
+        Chapter(
+            id=f"{doc_id}-c{len(chapters) + 1}",
+            title=_summary_title(language),
+            content=summary_text,
+        )
+    )
+    return Document(
+        id=doc_id,
+        course_code=course.code,
+        title=title,
+        kind=kind,
+        language=language,
+        chapters=chapters,
+    )
 
 
-def _build_documents(rng: random.Random, courses: list[Course]) -> list[Document]:
+def _build_documents(
+    rng: random.Random,
+    courses: list[Course],
+    count: int = NUM_DOCUMENTS,
+    kinds: tuple[str, ...] = BASE_DOCUMENT_KINDS,
+    start_index: int = 1,
+) -> list[Document]:
+    """Build ``count`` documents whose ids run from ``DOC-{start_index:03d}`` upward.
+
+    Default arguments preserve the original deterministic behaviour (40 docs,
+    half ``slides``/half ``textbook``); passing ``count`` and/or ``kinds`` is
+    used by the extra-documents layer but never by the legacy tests.
+    """
     pool = list(courses)
     rng.shuffle(pool)
-    chosen = pool[:NUM_DOCUMENTS]
+    chosen = pool[:count]
+    if len(chosen) < count:
+        repeats = (count + len(pool) - 1) // len(pool)
+        chosen = (chosen * repeats)[:count]
 
-    languages = ["vi"] * (NUM_DOCUMENTS // 2) + ["en"] * (NUM_DOCUMENTS // 2)
-    kinds = (["slides", "textbook"] * (NUM_DOCUMENTS // 2))[:NUM_DOCUMENTS]
+    languages = ["vi"] * (count // 2) + ["en"] * (count // 2)
+    languages = languages[:count]
+    kinds_seq = (list(kinds) * ((count // len(kinds)) + 1))[:count]
     rng.shuffle(languages)
-    rng.shuffle(kinds)
+    rng.shuffle(kinds_seq)
 
     return [
-        _document_for_course(rng, course, kind, language, f"DOC-{i + 1:03d}")
-        for i, (course, kind, language) in enumerate(zip(chosen, kinds, languages))
+        _document_for_course(
+            rng, course, kind, language, f"DOC-{start_index + i:03d}"
+        )
+        for i, (course, kind, language) in enumerate(
+            zip(chosen, kinds_seq, languages)
+        )
     ]
 
 
-def generate(seed: int = SEED) -> Dataset:
+class _LLMClient:
+    """Minimal seam the generator uses to ask an LLM to rewrite a section.
+
+    Concrete implementations live outside the generator so the CLI can wire
+    OpenRouter (or a no-op for tests). Failures must return ``None`` so the
+    generator falls back to the deterministic template.
+    """
+
+    def rewrite_section(
+        self, content: str, kind: str, language: str, course: "Course"
+    ) -> str | None:
+        return None
+
+
+def _build_extra_documents(
+    rng: random.Random,
+    courses: list[Course],
+    count: int,
+    llm_client: _LLMClient | None = None,
+) -> list[Document]:
+    """Extra documents in the four new ``kind``s, biased toward Vietnamese.
+
+    ``count`` is added on top of the 40 base documents; IDs run from
+    ``DOC-041`` upward. When ``llm_client`` is provided, intro/summary
+    sections for the new kinds may be rewritten by the LLM; any failure
+    silently falls back to the deterministic template.
+    """
+    if count <= 0:
+        return []
+    pool = list(courses)
+    rng.shuffle(pool)
+    chosen = (pool * ((count // len(pool)) + 1))[:count]
+
+    vi_n = round(count * VIETNAMESE_RATIO_FOR_EXTRA)
+    languages: list[str] = ["vi"] * vi_n + ["en"] * (count - vi_n)
+    rng.shuffle(languages)
+
+    kinds_seq = (
+        list(EXTRA_DOCUMENT_KINDS)
+        * ((count // len(EXTRA_DOCUMENT_KINDS)) + 1)
+    )[:count]
+    rng.shuffle(kinds_seq)
+
+    documents: list[Document] = []
+    for i, (course, kind, language) in enumerate(
+        zip(chosen, kinds_seq, languages)
+    ):
+        doc_id = f"DOC-{NUM_DOCUMENTS + i + 1:03d}"
+        documents.append(
+            _document_for_course(
+                rng, course, kind, language, doc_id, llm_client=llm_client
+            )
+        )
+    return documents
+
+
+def generate(
+    seed: int = SEED,
+    num_documents: int = NUM_DOCUMENTS,
+    extra_documents: int = 0,
+    llm_client: _LLMClient | None = None,
+) -> Dataset:
     rng = random.Random(seed)
     courses = _build_courses(rng)
-    documents = _build_documents(rng, courses)
+    documents = _build_documents(rng, courses, count=num_documents)
+    documents.extend(
+        _build_extra_documents(rng, courses, extra_documents, llm_client=llm_client)
+    )
     dataset = Dataset(courses=courses, documents=documents)
     assert_no_cycles(dataset.courses)
     return dataset
@@ -624,15 +1116,99 @@ def write(dataset: Dataset, out_dir: Path) -> None:
     (out_dir / "documents.json").write_text(json.dumps(data["documents"], ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+class _OpenRouterClient(_LLMClient):
+    """Optional LLM client wired to OpenRouter; only used when ``--use-llm`` is set.
+
+    The OpenAI-compatible endpoint and model follow the same defaults as the
+    rest of the project. Missing key disables the client (returns ``None``)
+    so the generator falls back to the deterministic template.
+    """
+
+    @classmethod
+    def from_env(cls) -> _OpenRouterClient | None:
+        import os
+
+        api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+        if not api_key:
+            return None
+        from rag_core.config import DEFAULT_BASE_URL, DEFAULT_LLM_MODEL
+
+        return cls(
+            api_key=api_key,
+            model=os.environ.get("RAG_LLM_MODEL", DEFAULT_LLM_MODEL),
+            base_url=os.environ.get("OPENROUTER_BASE_URL", DEFAULT_BASE_URL),
+        )
+
+    def __init__(self, api_key: str, model: str, base_url: str) -> None:
+        from openai import OpenAI
+
+        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        self._model = model
+
+    def rewrite_section(
+        self, content: str, kind: str, language: str, course: "Course"
+    ) -> str | None:
+        prompt = (
+            f"You are helping generate study material for an IT course chatbot. "
+            f"Rewrite the following {kind} section in {language}, keeping the same "
+            f"course ({course.code}). The output must mention the course by code "
+            f"and reference topics from the course. Output only the rewritten text."
+        )
+        try:
+            response = self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": content},
+                ],
+                temperature=0.3,
+            )
+        except Exception:
+            return None
+        text = (response.choices[0].message.content or "").strip()
+        return text or None
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Generate the synthetic CourseMate demo dataset.")
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed for reproducibility (default: %(default)s).")
     parser.add_argument("--out", type=Path, default=DATA_DIR, help="Output data directory (default: %(default)s).")
+    parser.add_argument(
+        "--extra-documents",
+        type=int,
+        default=0,
+        help=(
+            "Number of extra documents to add on top of the 40 base documents. "
+            "Extras use the new kinds (exam, lab_guide, cheatsheet, faq) and are "
+            "biased toward Vietnamese. Default: %(default)s."
+        ),
+    )
+    parser.add_argument(
+        "--use-llm",
+        action="store_true",
+        help=(
+            "Rewrite intro/summary sections of extra documents via OpenRouter. "
+            "Requires OPENROUTER_API_KEY; failures silently fall back to the "
+            "deterministic template."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    dataset = generate(seed=args.seed)
+    llm_client: _LLMClient | None = None
+    if args.use_llm:
+        llm_client = _OpenRouterClient.from_env()
+
+    dataset = generate(
+        seed=args.seed,
+        extra_documents=args.extra_documents,
+        llm_client=llm_client,
+    )
     write(dataset, args.out)
-    print(f"Generated {len(dataset.courses)} courses and {len(dataset.documents)} documents in {args.out}")
+    print(
+        f"Generated {len(dataset.courses)} courses and {len(dataset.documents)} "
+        f"documents in {args.out}"
+    )
+
 
 
 if __name__ == "__main__":

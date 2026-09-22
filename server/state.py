@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from fastapi import Request
 
-from rag_core import RagCore, build_rag_core
+from rag_core import RagCore, StreamEvent, build_rag_core
 from rag_core.attachments import AttachmentStore
 from rag_core.config import Config, load_config
 from rag_core.db import APP_DB_FILENAME, Database
 from rag_core.embeddings import Embedder
-from rag_core.models import AnswerResult, Session
+from rag_core.models import AnswerResult, EntityBundle, Session
 from server.auth import TokenStore
 
 
@@ -26,9 +27,16 @@ class CoreLike(Protocol):
     @property
     def embedder(self) -> Embedder: ...
 
+    @property
+    def entities(self) -> EntityBundle: ...
+
     def answer(
         self, user_message: str, session: Session, use_web: bool = False
     ) -> AnswerResult: ...
+
+    def stream_answer(
+        self, user_message: str, session: Session, use_web: bool = False
+    ) -> Iterator[StreamEvent]: ...
 
 
 @dataclass

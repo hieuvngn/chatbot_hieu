@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterator
+from dataclasses import dataclass
 import json
 import logging
 from pathlib import Path
@@ -18,8 +21,12 @@ from rag_core.config import Config, load_config
 from rag_core.course_advisor import CourseAdvisor
 from rag_core.db import APP_DB_FILENAME
 from rag_core.embeddings import Embedder, OpenRouterEmbedder
+from rag_core.entities import (
+    chunk_entity_bundle,
+    load_entity_bundle,
+)
 from rag_core.generator import Generator, OpenRouterGenerator, parse_citations
-from rag_core.index import FINAL_TOP_K, Index, dedupe_by_source
+from rag_core.index import FINAL_TOP_K, RETRIEVAL_GATE_THRESHOLD, Index, dedupe_by_source
 from rag_core.index import rrf_merge as rrf_merge_items
 from rag_core.intent import (
     CourseExtractor,
@@ -37,11 +44,55 @@ from rag_core.judge import (
     OpenRouterQueryRewriter,
     QueryRewriter,
 )
-from rag_core.models import MAX_TURNS, AnswerResult, Chunk, Session, Source
+from rag_core.models import (
+    Department,
+    EntityBundle,
+    Instructor,
+    MAX_TURNS,
+    AnswerResult,
+    Chunk,
+    Program,
+    Session,
+    Source,
+    Term,
+)
 from rag_core.rewrite import OpenRouterSessionRewriter, SessionRewriter
-from rag_core.skill_selector import OpenRouterSkillSelector, SkillSelector
+from rag_core.skill_selector import RuleSkillSelector, SkillSelector
 from rag_core.skills import SKILLS_DIR, Skill, load_skills
 from rag_core.web_search import FirecrawlWebSearcher, WebSearcher
+
+
+
+@dataclass(frozen=True)
+class StreamStart:
+    """First event of an accepted streaming answer."""
+
+    skills_applied: list[str]
+    sources: list[Source]
+
+
+@dataclass(frozen=True)
+class StreamDelta:
+    """One token delta from the generator."""
+
+    delta: str
+
+
+@dataclass(frozen=True)
+class StreamDone:
+    """Terminal event carrying the accepted result."""
+
+    result: AnswerResult
+
+
+@dataclass(frozen=True)
+class StreamRefused:
+    """Terminal event when the pipeline refused."""
+
+    rephrase_suggestion: str
+
+
+StreamEvent = StreamStart | StreamDelta | StreamDone | StreamRefused
 
 
 class RagCore:
@@ -88,11 +139,18 @@ class RagCore:
         self._allow_medium = allow_medium
         self._enable_fallback = enable_fallback
         self._index = index or self._build_index(data_dir, embedder)
+        self._entities = load_entity_bundle(data_dir)
         self._attachments = attachment_store
         self._attachment_cache: dict[str, tuple[tuple[str, ...], Index]] = {}
         self._skills: list[Skill] = list(skills) if skills else []
         self._skill_selector = skill_selector
         self._web_searcher = web_searcher
+
+    @property
+    def entities(self) -> EntityBundle:
+        """The structured entity tables loaded from disk; the UI uses this to
+        resolve Citation ``entity_id`` back to a display name + details."""
+        return self._entities
 
     @property
     def embedder(self) -> Embedder:
@@ -109,6 +167,8 @@ class RagCore:
         courses = json.loads((data_dir / "courses.json").read_text(encoding="utf-8"))
         documents = json.loads((data_dir / "documents.json").read_text(encoding="utf-8"))
         chunks = chunk_dataset(list(courses), list(documents))
+        entity_bundle = load_entity_bundle(data_dir)
+        chunks.extend(chunk_entity_bundle(entity_bundle))
         return Index(chunks, embedder)
 
     def _retrieve_sources(
@@ -174,28 +234,67 @@ class RagCore:
             )
             return []
 
+    def stream_answer(
+        self, user_message: str, session: Session, use_web: bool = False
+    ) -> 'Iterator[StreamEvent]':
+        """Streaming variant of ``answer()``; yields ``StreamEvent``s.
+
+        Reuses the synchronous pipeline order (rewrite → classify →
+        retrieve → judge/refine → generate → answer-check). For the
+        accepted branch, replays the produced answer as a single delta so
+        the UI renders identical content whether streamed or not.
+        """
+        result = self.answer(user_message, session, use_web=use_web)
+        if result.refused:
+            yield StreamRefused(rephrase_suggestion=result.rephrase_suggestion)
+            return
+        yield StreamStart(
+            skills_applied=list(result.skills_applied),
+            sources=list(result.sources),
+        )
+        yield StreamDelta(delta=result.answer)
+        yield StreamDone(result=result)
+
     def answer(
         self, user_message: str, session: Session, use_web: bool = False
     ) -> AnswerResult:
         query = self._rewrite_for_session(user_message, session)
         use_web_effective = bool(use_web) and self.has_web_search
-        if self._classifier is not None and self._extractor is not None and self._advisor is not None:
-            intent = self._classifier.classify(query)
-            if intent == "COURSE_ADVISOR":
-                return self._advisor_branch(query)
-            if (
-                intent == "OTHER"
-                and not self._session_has_attachments(session.id)
-                and not use_web_effective
-            ):
-                return self._other_result(query)
-        query_vector = np.asarray(self._embedder.embed_query(query), dtype=np.float32)
+        has_intent_branch = (
+            self._classifier is not None
+            and self._extractor is not None
+            and self._advisor is not None
+        )
+        # classify (LLM) and embed_query (embedding API) are independent —
+        # run them concurrently so the two network round-trips overlap.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            intent_future = (
+                pool.submit(self._classifier.classify, query)  # type: ignore[union-attr]
+                if has_intent_branch
+                else None
+            )
+            vector_future = pool.submit(self._embedder.embed_query, query)
+            intent = intent_future.result() if intent_future is not None else None
+            query_vector_list = vector_future.result()
+        if intent == "COURSE_ADVISOR":
+            assert self._extractor is not None
+            assert self._advisor is not None
+            return self._advisor_branch(query)
+        if (
+            intent == "OTHER"
+            and not self._session_has_attachments(session.id)
+            and not use_web_effective
+        ):
+            return self._other_result(query)
+        query_vector = np.asarray(query_vector_list, dtype=np.float32)
         retrieved = self._retrieve_sources(
             query, query_vector, session.id, use_web=use_web_effective
         )
 
         if self._judge is not None and self._rewriter is not None:
-            return self._gated_answer(query, retrieved, self._judge, self._rewriter, session.id)
+            return self._gated_answer(
+                query, retrieved, self._judge, self._rewriter, session.id, use_web=use_web_effective
+            )
         return self._generate_result(query, retrieved)
 
     def _rewrite_for_session(self, message: str, session: Session) -> str:
@@ -354,6 +453,10 @@ class RagCore:
             return True
         return False
 
+    def _retrieval_is_strong(self, question: str) -> bool:
+        """Cheap BM25 gate: strong lexical match ⇒ trusted retrieval."""
+        return self._index.lexical_top_score(question) >= RETRIEVAL_GATE_THRESHOLD
+
     def _gated_answer(
         self,
         question: str,
@@ -361,11 +464,15 @@ class RagCore:
         judge: Judge,
         rewriter: QueryRewriter,
         session_id: str | None = None,
+        use_web: bool = False,
     ) -> AnswerResult:
+        # Cheap gate first: a strong lexical match means retrieval is
+        # trustworthy — skip the LLM judge and its refine loop entirely.
+        if self._retrieval_is_strong(question):
+            return self._generate_result(question, chunks)
         judgment = judge.assess(question, chunks)
         if judgment.is_high:
             return self._generate_result(question, chunks)
-        # medium/low → one Refine (even permissive keeps the single retry)
         refined = rewriter.rewrite(question)
         refined_vector = np.asarray(
             self._embedder.embed_query(refined), dtype=np.float32
@@ -375,8 +482,8 @@ class RagCore:
         if self._is_acceptable(judgment):
             return self._generate_result(refined, refined_chunks)
         # CRAG correction: one web-search pass before giving up
-        if self._web_searcher is not None:
-            merged = self._corrective_merge(refined, refined_chunks)
+        if use_web and self._web_searcher is not None:
+            merged = self._corrective_merge(refined, refined_chunks, use_web=use_web)
             if merged:
                 judgment = judge.assess(refined, merged)
                 if self._is_acceptable(judgment):
@@ -388,9 +495,11 @@ class RagCore:
         )
 
     def _corrective_merge(
-        self, refined_query: str, refined_chunks: list[Chunk]
+        self, refined_query: str, refined_chunks: list[Chunk], use_web: bool = False
     ) -> list[Chunk]:
         """One CRAG correction step: fuse a fresh web search into the refined retrieval."""
+        if not use_web:
+            return []
         web_chunks = self._safe_web_search(refined_query)
         if not web_chunks:
             return []
@@ -417,7 +526,7 @@ class RagCore:
         return AnswerResult(answer=fallback_text, citations=[], sources=[], refused=False)
 
     def _select_skills(self, query: str) -> list[str]:
-        """Hỏi selector skill nào áp dụng; lỗi bất kỳ → chạy như không có skill."""
+        """Chọn skill theo keyword rule; lỗi bất kỳ → chạy như không có skill."""
         if not self._skills or self._skill_selector is None:
             return []
         try:
@@ -442,6 +551,11 @@ class RagCore:
             question, chunks, skill_instructions=skill_instructions
         )
         if self._checker is None:
+            return self._answer_result(answer_text, sources, skills_applied)
+        # Cheap gate: a draft that already cites valid Sources needs no
+        # second LLM pass — the citations are the grounding evidence.
+        draft_citations = parse_citations(answer_text, sources)
+        if draft_citations:
             return self._answer_result(answer_text, sources, skills_applied)
         verdict = self._checker.check(question, answer_text, chunks)
         if verdict.supported:
@@ -527,15 +641,9 @@ def build_rag_core(config: Config | None = None) -> RagCore:
         model=config.llm_model,
         base_url=config.base_url,
     )
-    attachment_store = AttachmentStore(config.data_dir / APP_DB_FILENAME, embedder)
     skills = load_skills(SKILLS_DIR)
-    skill_selector = (
-        OpenRouterSkillSelector(
-            api_key=config.api_key, model=config.llm_model, base_url=config.base_url
-        )
-        if skills
-        else None
-    )
+    attachment_store = AttachmentStore(config.data_dir / APP_DB_FILENAME, embedder)
+    skill_selector = RuleSkillSelector() if skills else None
     web_searcher: WebSearcher | None = (
         FirecrawlWebSearcher(config.firecrawl_api_key)
         if config.firecrawl_api_key
@@ -563,6 +671,11 @@ def build_rag_core(config: Config | None = None) -> RagCore:
 
 __all__ = [
     "RagCore",
+    "StreamStart",
+    "StreamDelta",
+    "StreamDone",
+    "StreamRefused",
+    "StreamEvent",
     "build_rag_core",
     "load_config",
     "AnswerResult",
@@ -579,7 +692,7 @@ __all__ = [
     "OpenRouterAnswerChecker",
     "CheckVerdict",
     "SessionRewriter",
-    "OpenRouterSessionRewriter",
+    "RuleSkillSelector",
     "CourseAdvisor",
     "IntentClassifier",
     "CourseExtractor",

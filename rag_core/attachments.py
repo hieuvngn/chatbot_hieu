@@ -110,7 +110,9 @@ CREATE TABLE IF NOT EXISTS attachments (
     size_bytes INTEGER NOT NULL,
     chunk_count INTEGER NOT NULL DEFAULT 0,
     language TEXT NOT NULL DEFAULT 'vi',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    raw_text TEXT,
+    raw_pdf BLOB
 );
 CREATE TABLE IF NOT EXISTS attachment_chunks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,6 +125,18 @@ CREATE TABLE IF NOT EXISTS attachment_chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_att_chunks_conv ON attachment_chunks(conversation_id);
 """
+
+
+_ATTACHMENT_RAW_COLUMNS = ("raw_text", "raw_pdf")
+
+
+def _migrate_attachment_raw(conn: sqlite3.Connection) -> None:
+    """Idempotently add raw_text / raw_pdf to pre-existing attachments tables."""
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info('attachments')").fetchall()}
+    for name in _ATTACHMENT_RAW_COLUMNS:
+        if name not in columns:
+            col_type = "BLOB" if name == "raw_pdf" else "TEXT"
+            conn.execute(f"ALTER TABLE attachments ADD COLUMN {name} {col_type}")
 
 
 @dataclass(frozen=True)
@@ -164,6 +178,7 @@ class AttachmentStore:
         self._embedder = embedder
         with contextlib.closing(self._connect()) as conn:
             conn.executescript(ATTACHMENTS_SCHEMA_SQL)
+            _migrate_attachment_raw(conn)
             conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
@@ -196,7 +211,6 @@ class AttachmentStore:
             )
         if any(str(r["filename"]).lower() == name.lower() for r in rows):
             raise ValueError(f"Đã tồn tại tài liệu tên '{name}' trong chat này.")
-
         attachment_id = uuid.uuid4().hex
         base_source = _source_for(attachment_id, name, "", language)
         chunks: list[Chunk] = []
@@ -211,12 +225,25 @@ class AttachmentStore:
         vectors = self._embedder.embed_batch([c.text for c in chunks])
 
         now = datetime.now(timezone.utc).isoformat()
+        raw_text: str | None = _decode(data, name) if ext != "pdf" else None
+        raw_pdf: bytes | None = data if ext == "pdf" else None
         with contextlib.closing(self._connect()) as conn:
             conn.execute(
                 "INSERT INTO attachments (id, conversation_id, filename, file_kind, "
-                "size_bytes, chunk_count, language, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (attachment_id, conversation_id, name, ext, len(data), len(chunks), language, now),
+                "size_bytes, chunk_count, language, created_at, raw_text, raw_pdf) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    attachment_id,
+                    conversation_id,
+                    name,
+                    ext,
+                    len(data),
+                    len(chunks),
+                    language,
+                    now,
+                    raw_text,
+                    raw_pdf,
+                ),
             )
             conn.executemany(
                 "INSERT INTO attachment_chunks (attachment_id, conversation_id, seq, "
@@ -277,6 +304,28 @@ class AttachmentStore:
         if cur.rowcount == 0:
             raise KeyError(f"no such attachment: {attachment_id}")
 
+    def get_content(self, attachment_id: str) -> list[Section]:
+        """Return the original parsed sections for viewer rendering.
+
+        Re-parses from the stored ``raw_text`` / ``raw_pdf`` to guarantee the
+        viewer shows the same heading/page boundaries the embedder saw. Raises
+        ``KeyError`` if the attachment does not exist.
+        """
+        with contextlib.closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT filename, file_kind, raw_text, raw_pdf "
+                "FROM attachments WHERE id = ?",
+                (attachment_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"no such attachment: {attachment_id}")
+        filename = str(row["filename"])
+        kind = str(row["file_kind"])
+        if kind == "pdf":
+            data = bytes(row["raw_pdf"]) if row["raw_pdf"] is not None else b""
+        else:
+            data = str(row["raw_text"] or "").encode("utf-8")
+        return parse_file(filename, data)
     def identity(self, conversation_id: str) -> tuple[str, ...]:
         with contextlib.closing(self._connect()) as conn:
             rows = conn.execute(

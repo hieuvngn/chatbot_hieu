@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from rag_core.models import Citation, Turn
 
@@ -40,11 +40,29 @@ class SourceOut(BaseModel):
     course_code: str
     kind: str
     language: str
+    entity_type: str = ""
+    entity_id: str = ""
 
 
 class CitationOut(BaseModel):
     marker: str
     source: SourceOut
+
+
+class EntityOut(BaseModel):
+    """Compact view of an entity record for the UI to resolve citation links."""
+
+    id: str
+    type: str
+    name: str
+    detail: dict[str, object] = Field(default_factory=dict)
+
+
+class EntitiesOut(BaseModel):
+    departments: list[EntityOut]
+    instructors: list[EntityOut]
+    programs: list[EntityOut]
+    terms: list[EntityOut]
 
 
 class TurnOut(BaseModel):
@@ -60,6 +78,7 @@ class ConversationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    user_id: int
     title: str
     created_at: str
     updated_at: str
@@ -93,6 +112,15 @@ class AttachmentOut(BaseModel):
     size_bytes: int
     chunk_count: int
     created_at: str
+
+
+class AttachmentSectionOut(BaseModel):
+    chapter: str
+    text: str
+
+
+class AttachmentContentOut(BaseModel):
+    sections: list[AttachmentSectionOut]
 
 
 def citation_out(citation: Citation) -> CitationOut:
