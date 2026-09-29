@@ -2,6 +2,7 @@ from __future__ import annotations
 import json, re
 from dataclasses import dataclass
 from typing import Literal, Protocol
+from rag_core.completion import request_text
 from rag_core.config import DEFAULT_BASE_URL, DEFAULT_LLM_MODEL
 
 Intent = Literal["COURSE_ADVISOR", "KNOWLEDGE_QA", "OTHER"]
@@ -52,8 +53,13 @@ class OpenRouterIntentClassifier:
         self._model = model
     def classify(self, query: str) -> Intent:
         try:
-            resp = self._client.chat.completions.create(model=self._model, messages=[{"role":"system","content":_CLASSIFIER_SYSTEM},{"role":"user","content":query}], temperature=0)
-            content = (resp.choices[0].message.content or "").strip()
+            content = request_text(
+                lambda: self._client.chat.completions.create(
+                    model=self._model,
+                    messages=[{"role":"system","content":_CLASSIFIER_SYSTEM},{"role":"user","content":query}],
+                    temperature=0,
+                )
+            ).strip()
             data = json.loads(_strip_code_fence(content))
             intent = data.get("intent")
             if intent in ("COURSE_ADVISOR","KNOWLEDGE_QA","OTHER"):
@@ -69,8 +75,13 @@ class OpenRouterCourseExtractor:
         self._model = model
     def extract(self, query: str) -> Extraction:
         try:
-            resp = self._client.chat.completions.create(model=self._model, messages=[{"role":"system","content":_EXTRACTOR_SYSTEM},{"role":"user","content":query}], temperature=0)
-            content = (resp.choices[0].message.content or "").strip()
+            content = request_text(
+                lambda: self._client.chat.completions.create(
+                    model=self._model,
+                    messages=[{"role":"system","content":_EXTRACTOR_SYSTEM},{"role":"user","content":query}],
+                    temperature=0,
+                )
+            ).strip()
             data = json.loads(_strip_code_fence(content))
             completed = [str(c).strip().upper() for c in data.get("completed_courses", []) if isinstance(c, str) and c.strip()]
             target = data.get("target_course")

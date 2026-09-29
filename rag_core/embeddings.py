@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from rag_core.completion import request_data
 from rag_core.config import DEFAULT_BASE_URL, DEFAULT_EMBED_DIM, DEFAULT_EMBED_MODEL
 
 class Embedder(Protocol):
@@ -41,10 +42,12 @@ class OpenRouterEmbedder:
         vectors: list[list[float]] = []
         for start in range(0, len(texts), self.MAX_BATCH_SIZE):
             chunk = texts[start : start + self.MAX_BATCH_SIZE]
-            response = self._client.embeddings.create(
-                model=self._model, input=chunk, encoding_format="float"
+            response = request_data(
+                lambda: self._client.embeddings.create(
+                    model=self._model, input=chunk, encoding_format="float"
+                )
             )
-            vectors.extend(item.embedding for item in response.data)
+            vectors.extend(item.embedding for item in response)
         return vectors
 
     def embed_query(self, text: str) -> list[float]:

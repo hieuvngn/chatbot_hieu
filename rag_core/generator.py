@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from typing import Any, Protocol, cast
 
 from rag_core.config import DEFAULT_BASE_URL, DEFAULT_LLM_MODEL
+from rag_core.completion import request_text
 from rag_core.models import Chunk, Citation, Source
 
 _SYSTEM_PROMPT = (
@@ -107,11 +108,12 @@ class OpenRouterGenerator:
         *,
         skill_instructions: str = "",
     ) -> str:
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=cast(Any, self._build_messages(question, chunks, feedback, skill_instructions)),
+        return request_text(
+            lambda: self._client.chat.completions.create(
+                model=self._model,
+                messages=cast(Any, self._build_messages(question, chunks, feedback, skill_instructions)),
+            )
         )
-        return response.choices[0].message.content or ""
 
     def stream(
         self,
@@ -137,14 +139,15 @@ class OpenRouterGenerator:
                     yield delta
 
     def generate_fallback(self, question: str) -> str:
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": _FALLBACK_SYSTEM_PROMPT},
-                {"role": "user", "content": f"Question: {question}"},
-            ],
+        return request_text(
+            lambda: self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": _FALLBACK_SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Question: {question}"},
+                ],
+            )
         )
-        return response.choices[0].message.content or ""
 
 
 def parse_citations(answer: str, sources: list[Source]) -> list[Citation]:

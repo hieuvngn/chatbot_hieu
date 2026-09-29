@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from rag_core.completion import request_text
 from rag_core.config import DEFAULT_BASE_URL, DEFAULT_LLM_MODEL
 from rag_core.generator import numbered_sources
 from rag_core.models import Chunk
@@ -98,14 +99,15 @@ class OpenRouterJudge:
     def assess(self, query: str, chunks: list[Chunk]) -> Judgment:
         sources = numbered_sources(chunks) or "No sources were retrieved."
         user_prompt = f"Question: {query}\n\nSources:\n{sources}"
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": _JUDGE_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
+        content = request_text(
+            lambda: self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": _JUDGE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
         )
-        content = response.choices[0].message.content or ""
         try:
             return _parse_judgment(content)
         except (json.JSONDecodeError, ValueError):
@@ -131,12 +133,13 @@ class OpenRouterQueryRewriter:
         self._model = model
 
     def rewrite(self, query: str) -> str:
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": _REWRITE_SYSTEM_PROMPT},
-                {"role": "user", "content": query},
-            ],
-        )
-        rewritten = (response.choices[0].message.content or "").strip()
+        rewritten = request_text(
+            lambda: self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": _REWRITE_SYSTEM_PROMPT},
+                    {"role": "user", "content": query},
+                ],
+            )
+        ).strip()
         return rewritten or query

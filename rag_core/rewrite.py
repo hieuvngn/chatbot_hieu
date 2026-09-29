@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from rag_core.completion import CompletionError, request_text
 from rag_core.config import DEFAULT_BASE_URL, DEFAULT_LLM_MODEL
 from rag_core.models import Turn
 
@@ -43,12 +44,16 @@ class OpenRouterSessionRewriter:
     def rewrite(self, message: str, turns: list[Turn]) -> str:
         history = "\n".join(f"{turn.role}: {turn.text}" for turn in turns) or "No previous turns."
         user_prompt = f"Previous turns:\n{history}\n\nCurrent message: {message}"
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": _SESSION_REWRITE_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-        rewritten = (response.choices[0].message.content or "").strip()
+        try:
+            rewritten = request_text(
+                lambda: self._client.chat.completions.create(
+                    model=self._model,
+                    messages=[
+                        {"role": "system", "content": _SESSION_REWRITE_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                )
+            ).strip()
+        except CompletionError:
+            return message
         return rewritten or message

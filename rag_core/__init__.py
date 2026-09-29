@@ -293,7 +293,7 @@ class RagCore:
 
         if self._judge is not None and self._rewriter is not None:
             return self._gated_answer(
-                query, retrieved, self._judge, self._rewriter, session.id, use_web=use_web_effective
+                query, retrieved, self._judge, self._rewriter, session.id
             )
         return self._generate_result(query, retrieved)
 
@@ -464,7 +464,6 @@ class RagCore:
         judge: Judge,
         rewriter: QueryRewriter,
         session_id: str | None = None,
-        use_web: bool = False,
     ) -> AnswerResult:
         # Cheap gate first: a strong lexical match means retrieval is
         # trustworthy — skip the LLM judge and its refine loop entirely.
@@ -481,9 +480,11 @@ class RagCore:
         judgment = judge.assess(refined, refined_chunks)
         if self._is_acceptable(judgment):
             return self._generate_result(refined, refined_chunks)
-        # CRAG correction: one web-search pass before giving up
-        if use_web and self._web_searcher is not None:
-            merged = self._corrective_merge(refined, refined_chunks, use_web=use_web)
+        # CRAG correction: one web-search pass before giving up. Runs whenever a
+        # searcher is wired in — the use_web toggle governs the retrieval stage
+        # only, not this last-resort correction.
+        if self._web_searcher is not None:
+            merged = self._corrective_merge(refined, refined_chunks)
             if merged:
                 judgment = judge.assess(refined, merged)
                 if self._is_acceptable(judgment):
@@ -495,11 +496,9 @@ class RagCore:
         )
 
     def _corrective_merge(
-        self, refined_query: str, refined_chunks: list[Chunk], use_web: bool = False
+        self, refined_query: str, refined_chunks: list[Chunk]
     ) -> list[Chunk]:
         """One CRAG correction step: fuse a fresh web search into the refined retrieval."""
-        if not use_web:
-            return []
         web_chunks = self._safe_web_search(refined_query)
         if not web_chunks:
             return []

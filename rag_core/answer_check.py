@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Protocol
 
+from rag_core.completion import request_text
 from rag_core.config import DEFAULT_BASE_URL, DEFAULT_LLM_MODEL
 from rag_core.generator import numbered_sources
 from rag_core.models import Chunk
@@ -88,14 +89,15 @@ class OpenRouterAnswerChecker:
             f"Question: {question}\n\nSources:\n{sources}\n\n"
             f"Draft answer:\n{answer}"
         )
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": _CHECKER_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
+        content = request_text(
+            lambda: self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": _CHECKER_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
         )
-        content = response.choices[0].message.content or ""
         try:
             return _parse_verdict(content)
         except (json.JSONDecodeError, ValueError):
