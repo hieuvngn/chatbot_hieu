@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ import generate_data as gd
 from rag_core import RagCore, Session
 from rag_core.attachments import AttachmentStore
 from rag_core.db import Database
+from rag_core.generator import Generator
 from rag_core.intent import Extraction, Intent
 from rag_core.answer_check import CheckVerdict, DEFAULT_UNSUPPORTED_FEEDBACK
 from rag_core.judge import Judgment, Level
@@ -100,6 +102,18 @@ class FakeGenerator:
         first_sentence = chunks[0].text.split(".")[0]
         return f"Trả lời về {sources[0].document_title}: {first_sentence}. [1]"
 
+    def stream(
+        self,
+        question: str,
+        chunks: list[Chunk],
+        feedback: str | None = None,
+        *,
+        skill_instructions: str = "",
+    ) -> Iterator[str]:
+        yield self.generate(
+            question, chunks, feedback, skill_instructions=skill_instructions
+        )
+
 
 class UncitedGenerator:
     """Draft without any [n] markers — exercises the answer-check path."""
@@ -126,6 +140,18 @@ class UncitedGenerator:
         if feedback is not None and self.cite_on_regen:
             return f"Trả lời về {sources[0].document_title}: {first_sentence}. [1]"
         return f"Trả lời về {sources[0].document_title}: {first_sentence}."
+
+    def stream(
+        self,
+        question: str,
+        chunks: list[Chunk],
+        feedback: str | None = None,
+        *,
+        skill_instructions: str = "",
+    ) -> Iterator[str]:
+        yield self.generate(
+            question, chunks, feedback, skill_instructions=skill_instructions
+        )
 
 
 class FakeJudge:
@@ -183,7 +209,7 @@ def _content_tokens(text: str) -> list[str]:
 
 
 def make_core(tmp_path: Path, embedder: RecordingEmbedder | None = None,
-              generator: FakeGenerator | None = None,
+              generator: Generator | None = None,
               judge: FakeJudge | None = None,
               rewriter: FakeRewriter | None = None,
               checker: FakeChecker | None = None,

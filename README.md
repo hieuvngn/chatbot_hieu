@@ -203,6 +203,32 @@ Automated tests run on every push and pull request via GitHub Actions:
 
 - **Python tests** — unit + integration on Python 3.11, 3.12, 3.13 (mypy included)
 - **System tests** — run with `OPENROUTER_API_KEY` secret (optional)
-- **Web build** — TypeScript typecheck, lint, production build
+- **Web build** — TypeScript typecheck, lint, component tests, production build
+- **Web API integration** — the real `api.ts` against a live server + SQLite (no LLM)
 
 See `.github/workflows/ci.yml` for the full configuration.
+
+## Tests
+
+Python (from the repo root):
+
+```sh
+uv run pytest                          # everything, including real-LLM system tests
+uv run pytest -m "not system"          # unit + integration only (no API key needed)
+```
+
+Web (from `web/`):
+
+```sh
+npm run test                           # both suites
+npm run test:component                 # component↔component, api mocked (jsdom)
+npm run test:api                       # real client ↔ real server ↔ real SQLite
+```
+
+The three layers cover the seams the pipeline does not:
+
+| Suite | Seam | How |
+|---|---|---|
+| `tests/test_frontend_contract.py` | UI ↔ backend contract | Parses `web/src/lib/types.ts` + `api.ts` and asserts they match `server/schemas.py` and the mounted routes |
+| `web/src/**/*.test.tsx` | component ↔ component | Renders real components with `@/lib/api` mocked |
+| `web/src/lib/api.integration.node.test.ts` | UI ↔ API ↔ DB | Real `api.ts` over HTTP against `tests/fake_api_server.py` — real routing, Pydantic, multipart, SQLite; only the LLM is stubbed |

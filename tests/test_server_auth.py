@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from rag_core import StreamDone, StreamEvent, StreamStart
 from rag_core.attachments import AttachmentStore
 from rag_core.db import Database
-from rag_core.models import AnswerResult
+from rag_core.models import AnswerResult, EntityBundle, Session
 from server.auth import TokenStore
 from server.main import create_app
 from server.state import AppState
@@ -26,9 +28,21 @@ class FakeCore:
         self.embedder = FakeEmbedder()
 
     def answer(
-        self, user_message: str, session: object, use_web: bool = False
+        self, user_message: str, session: Session, use_web: bool = False
     ) -> AnswerResult:
         raise AssertionError("not used in auth tests")
+
+    @property
+    def entities(self) -> EntityBundle:
+        return EntityBundle(departments=(), instructors=(), programs=(), terms=())
+
+    def stream_answer(
+        self, user_message: str, session: Session, use_web: bool = False
+    ) -> Iterator[StreamEvent]:
+        yield StreamStart(skills_applied=[], sources=[])
+        yield StreamDone(
+            result=self.answer(user_message, session, use_web)
+        )
 
 
 def make_client(tmp_path: Path) -> tuple[TestClient, Database]:

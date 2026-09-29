@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,32 @@ from rag_core.entities import (
     load_entity_bundle,
 )
 from rag_core.models import Department, Instructor, Program, Term
+
+
+class _StubEmbedder:
+    dim = 8
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        import numpy as np
+
+        return [
+            np.random.RandomState(hash(t) & 0xFFFFFFFF).randn(8).astype("float32").tolist()
+            for t in texts
+        ]
+
+    def embed_query(self, t: str) -> list[float]:
+        return self.embed_batch([t])[0]
+
+
+class _StubGenerator:
+    def generate(self, *args: object, **kwargs: object) -> str:
+        return "stub"
+
+    def stream(self, *args: object, **kwargs: object) -> Iterator[str]:
+        return iter([])
+
+    def generate_fallback(self, q: str) -> str:
+        return "fallback"
 
 
 @pytest.fixture()
@@ -104,29 +131,6 @@ def test_dedupe_by_source_handles_entities(entity_data_dir: Path) -> None:
 
 
 def test_ragcore_ingests_entity_chunks(entity_data_dir: Path) -> None:
-    class _StubEmbedder:
-        dim = 8
-
-        def embed_batch(self, texts):
-            import numpy as np
-            return [
-                np.random.RandomState(hash(t) & 0xFFFFFFFF).randn(8).astype("float32").tolist()
-                for t in texts
-            ]
-
-        def embed_query(self, t):
-            return self.embed_batch([t])[0]
-
-    class _StubGenerator:
-        def generate(self, *args, **kwargs):
-            return "stub"
-
-        def stream(self, *args, **kwargs):
-            return iter([])
-
-        def generate_fallback(self, q):
-            return "fallback"
-
     core = RagCore(
         data_dir=entity_data_dir,
         embedder=_StubEmbedder(),
@@ -143,29 +147,6 @@ def test_ragcore_ingests_entity_chunks(entity_data_dir: Path) -> None:
 
 
 def test_ragcore_entities_property_returns_bundle(entity_data_dir: Path) -> None:
-    class _StubEmbedder:
-        dim = 8
-
-        def embed_batch(self, texts):
-            import numpy as np
-            return [
-                np.random.RandomState(hash(t) & 0xFFFFFFFF).randn(8).astype("float32").tolist()
-                for t in texts
-            ]
-
-        def embed_query(self, t):
-            return self.embed_batch([t])[0]
-
-    class _StubGenerator:
-        def generate(self, *args, **kwargs):
-            return "stub"
-
-        def stream(self, *args, **kwargs):
-            return iter([])
-
-        def generate_fallback(self, q):
-            return "fallback"
-
     core = RagCore(
         data_dir=entity_data_dir,
         embedder=_StubEmbedder(),

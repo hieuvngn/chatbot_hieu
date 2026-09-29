@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from pathlib import Path
 from rag_core import RagCore, Session
 from rag_core.course_advisor import CourseAdvisor
@@ -31,6 +32,16 @@ class DummyGenerator:
         skill_instructions: str = "",
     ) -> str:
         return "dummy RAG answer [1]"
+
+    def stream(
+        self,
+        q: str,
+        chunks: list[Chunk],
+        feedback: str | None = None,
+        *,
+        skill_instructions: str = "",
+    ) -> Iterator[str]:
+        yield self.generate(q, chunks, feedback, skill_instructions=skill_instructions)
 
 DATA_DIR = Path("data")
 SESSION = Session(id="s1", user_id="u1", turns=[])

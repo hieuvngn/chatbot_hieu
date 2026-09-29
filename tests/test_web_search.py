@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -159,6 +160,18 @@ class FakeGenerator:
         skill_instructions: str = "",
     ) -> str:
         return f"Trả lời về {chunks[0].source.document_title}: {chunks[0].text[:40]} [1]"
+
+    def stream(
+        self,
+        question: str,
+        chunks: list[Chunk],
+        feedback: str | None = None,
+        *,
+        skill_instructions: str = "",
+    ) -> Iterator[str]:
+        yield self.generate(
+            question, chunks, feedback, skill_instructions=skill_instructions
+        )
 
 
 class ScriptedJudge:
@@ -331,6 +344,18 @@ class CiteAllGenerator:
         skill_instructions: str = "",
     ) -> str:
         return " ".join(f"[{i}]" for i in range(1, len(chunks) + 1))
+
+    def stream(
+        self,
+        question: str,
+        chunks: list[Chunk],
+        feedback: str | None = None,
+        *,
+        skill_instructions: str = "",
+    ) -> Iterator[str]:
+        yield self.generate(
+            question, chunks, feedback, skill_instructions=skill_instructions
+        )
 
 
 def test_corrective_web_pass_answers_after_failed_refine(tmp_path: Path) -> None:

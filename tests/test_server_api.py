@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from rag_core import StreamDone, StreamEvent, StreamStart
 from rag_core.attachments import AttachmentStore
 from rag_core.db import Database
-from rag_core.models import AnswerResult, Citation, Session, Source
+from rag_core.models import (
+    AnswerResult,
+    Citation,
+    EntityBundle,
+    Session,
+    Source,
+)
 from server.auth import TokenStore
 from server.main import create_app
 from server.state import AppState
@@ -42,6 +50,17 @@ class FakeCore:
         return AnswerResult(
             answer=f"echo: {user_message}", citations=[citation], sources=[source]
         )
+
+    @property
+    def entities(self) -> EntityBundle:
+        return EntityBundle(departments=(), instructors=(), programs=(), terms=())
+
+    def stream_answer(
+        self, user_message: str, session: Session, use_web: bool = False
+    ) -> Iterator[StreamEvent]:
+        result = self.answer(user_message, session, use_web)
+        yield StreamStart(skills_applied=result.skills_applied, sources=result.sources)
+        yield StreamDone(result=result)
 
 
 def make_client(
