@@ -48,12 +48,11 @@ jobs:
   test-python-system:
     name: Python system tests
     runs-on: ubuntu-latest
-    if: env.OPENROUTER_API_KEY != ''
-    defaults:
-      run:
-        working-directory: .
-      env:
-        CI: "true"
+    # `secrets` is the only context available to a job-level `if`; the `env`
+    # context is not, so the secret must be tested here rather than via env.
+    if: ${{ secrets.OPENROUTER_API_KEY != '' }}
+    env:
+      CI: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -80,6 +79,7 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Generate data
+        if: ${{ secrets.OPENROUTER_API_KEY != '' }}
         run: uv run python -m generate_data --seed 42
 
       - name: Run system tests
