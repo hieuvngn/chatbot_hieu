@@ -29,7 +29,7 @@ import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, cast
 
 SEED = 42
 
@@ -171,7 +171,7 @@ def _build_instructors(courses: list[dict[str, object]]) -> list[dict[str, objec
 def _build_programs(courses: list[dict[str, object]]) -> list[dict[str, object]]:
     by_semester: dict[int, list[str]] = {}
     for c in courses:
-        by_semester.setdefault(int(c["semester"]), []).append(str(c["code"]))
+        by_semester.setdefault(int(str(c["semester"])), []).append(str(c["code"]))
     out: list[dict[str, object]] = []
     for prog_id, name_vi, name_en, dept_id, total in PROGRAMS:
         required: list[str] = []
@@ -203,10 +203,10 @@ def _build_terms(
     courses: list[dict[str, object]],
 ) -> list[dict[str, object]]:
     sorted_courses = sorted(courses, key=lambda c: str(c["code"]))
-    instructor_for_course = {
-        entry["course_code"]: instructor
+    instructor_for_course: dict[str, object] = {
+        str(entry["course_code"]): instructor
         for instructor in instructors
-        for entry in instructor["courses"]
+        for entry in cast(list[dict[str, object]], instructor["courses"])
     }
     out: list[dict[str, object]] = []
     for term_id, year, season, start, end in TERMS:
@@ -219,19 +219,23 @@ def _build_terms(
             )
             if not include:
                 continue
-            primary = instructor_for_course.get(code, instructors[0])
+            primary = cast(
+                dict[str, object], instructor_for_course.get(code, instructors[0])
+            )
             # Fall terms pick a different instructor to exercise the override.
             if season == "fall":
                 override = instructors[(idx + 1) % len(instructors)]
                 instructor_id = (
-                    override["id"] if override["id"] != primary["id"] else primary["id"]
+                    str(override["id"])
+                    if override["id"] != primary["id"]
+                    else str(primary["id"])
                 )
             else:
-                instructor_id = primary["id"]
+                instructor_id = str(primary["id"])
             offered.append(
                 {
                     "course_code": code,
-                    "instructor_id": instructor_id,
+                    "instructor_id": str(instructor_id),
                     "schedule": f"Thứ {(idx % 6) + 2}, tiết {(idx % 4) + 1}-{(idx % 4) + 3}",
                 }
             )

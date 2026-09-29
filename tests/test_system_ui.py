@@ -81,8 +81,12 @@ BASE_URL = f"http://127.0.0.1:{SERVER_PORT}"
 
 # Seconds to wait for the server to embed the corpus and bind the port.
 SERVER_READY_TIMEOUT = 240
-# Milliseconds to wait for one streamed LLM answer.
-REPLY_TIMEOUT = 300_000
+# Milliseconds to wait for one streamed LLM answer. A single question runs
+# ~8 sequential LLM/embedding round-trips against a rate-limited provider, and
+# the corpus here is data/ (437 chunks). Measured 90s for the pipeline itself
+# and 217s end-to-end through the browser, so 300s left too little headroom and
+# failed intermittently under load rather than on a real regression.
+REPLY_TIMEOUT = 600_000
 
 # True once the page shows a SETTLED assistant turn. Tokens stream into the
 # same div, so a turn counts as settled only when its text stops changing
@@ -155,6 +159,21 @@ def _start_server(data_dir: Path, log_path: Path) -> subprocess.Popen[bytes]:
     )
 
 
+def _stop_server(proc: "subprocess.Popen[bytes]", grace: int = 10) -> None:
+    """Terminate the server, escalating to kill if a request is still in flight.
+
+    A pipeline call holds the event loop while it waits on the LLM, so SIGTERM
+    alone can take longer than the grace period and would raise
+    TimeoutExpired, masking the real test failure with a teardown error.
+    """
+    proc.terminate()
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=grace)
+
+
 def _register_via_api(base_url: str, username: str, password: str) -> bool:
     """Register a user via API. Returns True if created, False if exists."""
     try:
@@ -181,12 +200,22 @@ def _login(page: Page) -> None:
     page.fill('input[type="password"]', DEMO_PASSWORD)
     page.click("button[type=submit]")
     page.wait_for_url("**/c/**", timeout=20_000)
+    # The URL flips before React paints; wait for the composer so callers can
+    # assert on rendered content without racing the first paint.
+    page.wait_for_selector('textarea[placeholder*="Hỏi về"]', timeout=20_000)
 
 
 def _new_chat(page: Page) -> None:
-    """Start an empty conversation so assertions never see stale turns."""
+    """Start an empty conversation so assertions never see stale turns.
+
+    The URL is already ``/c/<id>`` before the click, so a plain
+    ``wait_for_url("**/c/**")`` returns immediately and the next action can
+    land on the previous conversation — the upload then posts to the old id
+    and its sidebar never lists the file. Wait for the id to actually change.
+    """
+    before = page.url
     page.get_by_role("button", name="Chat mới").click()
-    page.wait_for_url("**/c/**", timeout=20_000)
+    page.wait_for_url(lambda url: url != before, timeout=20_000)
     page.wait_for_selector('textarea[placeholder*="Hỏi về"]', timeout=20_000)
     page.wait_for_function(
         "() => document.querySelectorAll('div.space-y-3').length === 0",
@@ -216,8 +245,7 @@ def server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
         _register_via_api(BASE_URL, DEMO_USERNAME, DEMO_PASSWORD)
         yield BASE_URL
     finally:
-        proc.terminate()
-        proc.wait(timeout=30)
+        _stop_server(proc)
 
 
 @pytest.fixture(scope="module")
@@ -267,6 +295,8 @@ class TestUILogin:
     def test_login_redirects_to_login_when_not_authenticated(self, page: Page) -> None:
         page.goto(f"{BASE_URL}/c/test-conv")
         page.wait_for_url("**/login**", timeout=20_000)
+        # URL changes before the login form renders; assert once it exists.
+        page.wait_for_selector('input[placeholder*="Tên"]', timeout=20_000)
         assert "CourseMate" in page.content()
 
 
@@ -298,18 +328,31 @@ class TestUIChat:
         The pipeline is non-deterministic across runs (grounded answer vs.
         refusal vs. general-knowledge fallback), so this asserts the UI rule
         for each outcome instead of pinning one.
+
+        The question is on-domain (BM25 22.4 vs the 11.5 gate) so retrieval is
+        trusted without the judge; an off-domain question would let the CRAG
+        corrective return web-only citations, which render in a separate
+        section and leave the KB citation list empty.
+
+        The citation header is matched case-insensitively because it is styled
+        ``uppercase`` — Playwright's inner_text returns the rendered text.
         """
-        _ask(page, "giải thích bảng băm là gì?")
+        _ask(page, "tối ưu hóa")
         page.wait_for_function(REPLY_SETTLED_JS, timeout=REPLY_TIMEOUT, polling=1000)
 
         body = page.locator("main").first.inner_text()
+        # The citation header is styled `uppercase`, so inner_text() returns it
+        # uppercased; compare case-insensitively.
+        citation_header = "tài liệu tham khảo"
         if "Không tìm đủ tài liệu" in body:  # refusal branch
             assert "Gợi ý viết lại" in body, "refusal must show a rephrase suggestion"
         elif "Không tìm thấy tài liệu liên quan" in body:  # fallback branch
             assert "trả lời theo hiểu biết chung" in body
-            assert "Tài liệu tham khảo" not in body, "fallback must render no citations"
+            assert citation_header not in body.lower(), (
+                "fallback must render no citations"
+            )
         else:  # grounded-answer branch
-            assert "Tài liệu tham khảo" in body, (
+            assert citation_header in body.lower(), (
                 f"expected refusal/fallback/citation section, got: {body[:400]}"
             )
 

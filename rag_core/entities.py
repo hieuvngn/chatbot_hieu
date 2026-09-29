@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, cast
 
 from rag_core.models import (
     Chunk,
@@ -35,7 +35,7 @@ ENTITY_FILE_NAMES: tuple[str, ...] = (
 def _read_json(path: Path) -> list[object]:
     if not path.exists():
         return []
-    return json.loads(path.read_text(encoding="utf-8"))
+    return cast(list[object], json.loads(path.read_text(encoding="utf-8")))
 
 
 def load_entity_bundle(data_dir: Path) -> EntityBundle:

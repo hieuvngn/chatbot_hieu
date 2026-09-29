@@ -448,6 +448,8 @@ def _citation_to_dict(citation: Citation) -> dict[str, str]:
         "course_code": source.course_code,
         "kind": source.kind,
         "language": source.language,
+        "entity_type": source.entity_type,
+        "entity_id": source.entity_id,
     }
 
 
@@ -463,5 +465,7 @@ def _citation_from_dict(raw: object) -> Citation:
         course_code=raw["course_code"],
         kind=raw["kind"],
         language=raw["language"],
+        entity_type=str(raw.get("entity_type", "")),
+        entity_id=str(raw.get("entity_id", "")),
     )
     return Citation(marker=raw["marker"], source=source)

@@ -15,7 +15,7 @@ from fastapi.params import Form
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from rag_core import StreamDelta, StreamDone, StreamRefused, StreamStart
-from rag_core.models import AnswerResult, ConversationMeta, Turn, User
+from rag_core.models import AnswerResult, ConversationMeta, Source, Turn, User
 from server.schemas import (
     AttachmentContentOut,
     AttachmentOut,
@@ -195,6 +195,20 @@ def chat(
     )
 
 
+def _source_payload(source: Source) -> dict[str, object]:
+    """Serialize a Source for NDJSON; mirrors the SourceOut response model."""
+    return {
+        "document_id": source.document_id,
+        "document_title": source.document_title,
+        "chapter": source.chapter,
+        "course_code": source.course_code,
+        "kind": source.kind,
+        "language": source.language,
+        "entity_type": source.entity_type,
+        "entity_id": source.entity_id,
+    }
+
+
 def _ndjson_line(payload: dict[str, object]) -> bytes:
     return (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
 
@@ -233,15 +247,7 @@ def chat_stream(
                 if isinstance(event, StreamStart):
                     skills_applied = list(event.skills_applied)
                     sources_payload = [
-                        {
-                            "document_id": src.document_id,
-                            "document_title": src.document_title,
-                            "chapter": src.chapter,
-                            "course_code": src.course_code,
-                            "kind": src.kind,
-                            "language": src.language,
-                        }
-                        for src in event.sources
+                        _source_payload(src) for src in event.sources
                     ]
                     yield _ndjson_line(
                         {"event": "start", "skills_applied": skills_applied,
@@ -256,15 +262,7 @@ def chat_stream(
                             "event": "done",
                             "answer": event.result.answer,
                             "citations": [
-                                {"marker": c.marker,
-                                 "source": {
-                                     "document_id": c.source.document_id,
-                                     "document_title": c.source.document_title,
-                                     "chapter": c.source.chapter,
-                                     "course_code": c.source.course_code,
-                                     "kind": c.source.kind,
-                                     "language": c.source.language,
-                                 }}
+                                {"marker": c.marker, "source": _source_payload(c.source)}
                                 for c in event.result.citations
                             ],
                             "sources": sources_payload,
@@ -358,12 +356,6 @@ def entities(state: StateDep) -> EntitiesOut:
             for t in bundle.terms
         ],
     )
-
-    with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
-        row = conn.execute(
-            "SELECT conversation_id FROM attachments WHERE id = ?", (attachment_id,)
-        ).fetchone()
-    return str(row[0]) if row is not None else None
 
 
 @router.get("/attachments", response_model=list[AttachmentOut])

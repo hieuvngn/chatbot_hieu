@@ -66,7 +66,7 @@ def _auth_header(token: str) -> dict[str, str]:
 def _create_conversation(client: TestClient, headers: dict[str, str]) -> str:
     res = client.post("/api/conversations", json={}, headers=headers)
     assert res.status_code == 201
-    return res.json()["id"]
+    return str(res.json()["id"])
 
 
 def _register_login(client: TestClient, username: str, password: str) -> str:
@@ -74,13 +74,13 @@ def _register_login(client: TestClient, username: str, password: str) -> str:
         "/api/auth/register", json={"username": username, "password": password}
     )
     if reg.status_code == 201:
-        return reg.json()["token"]
+        return str(reg.json()["token"])
     # User may already exist from a previous test — try login.
     login = client.post(
         "/api/auth/login", json={"username": username, "password": password}
     )
     assert login.status_code == 200, f"register/login failed: {login.json()}"
-    return login.json()["token"]
+    return str(login.json()["token"])
 
 
 # ---------------------------------------------------------------------------
@@ -89,10 +89,13 @@ def _register_login(client: TestClient, username: str, password: str) -> str:
 
 REASON_NO_KEY = "OPENROUTER_API_KEY not set — system tests require real LLM"
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("OPENROUTER_API_KEY"),
-    reason=REASON_NO_KEY,
-)
+pytestmark = [
+    pytest.mark.system,
+    pytest.mark.skipif(
+        not os.environ.get("OPENROUTER_API_KEY"),
+        reason=REASON_NO_KEY,
+    ),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -246,9 +249,19 @@ class TestChatE2EStreaming:
 
 
 class TestChatE2EWebSearch:
-    """Web search toggle merges web results into retrieval."""
+    """use_web governs the retrieval stage only.
 
-    def test_use_web_false_no_web_sources(self, tmp_path: Path) -> None:
+    The CRAG corrective pass is a separate last resort: it runs whenever a
+    web searcher is wired in, even with use_web=false, so a weak-retrieval
+    question can still return web sources. These tests pin the toggle itself,
+    using an on-domain question whose BM25 score clears RETRIEVAL_GATE_THRESHOLD
+    so the judge — and therefore the corrective pass — is bypassed entirely.
+    """
+
+    ON_DOMAIN_QUESTION = "tối ưu hóa"
+
+    def test_use_web_false_keeps_retrieval_local(self, tmp_path: Path) -> None:
+        """With the toggle off, retrieval returns no web sources at all."""
         client, db, core = _make_real_client(tmp_path)
         token = _register_login(client, "sys_web_a", "pass")
         headers = _auth_header(token)
@@ -256,15 +269,42 @@ class TestChatE2EWebSearch:
 
         response = client.post(
             f"/api/conversations/{conv_id}/chat",
-            json={"message": "giải thích bảng băm là gì?", "use_web": False},
+            json={"message": self.ON_DOMAIN_QUESTION, "use_web": False},
             headers=headers,
         )
+        assert response.status_code == 200
         turn = response.json()
-        for citation in turn.get("citations", []):
+        citations = turn.get("citations", [])
+        assert citations, "on-domain question must still cite retrieved KB sources"
+        for citation in citations:
             assert citation["source"]["kind"] != "web", (
-                "use_web=false should not return web citations"
+                f"use_web=false must not reach the searcher at retrieval: {citation['source']}"
             )
         assert isinstance(core.has_web_search, bool)
+
+    @pytest.mark.skipif(
+        not os.environ.get("FIRECRAWL_API_KEY"),
+        reason="FIRECRAWL_API_KEY not set — web merge needs a real searcher",
+    )
+    def test_use_web_true_merges_web_into_retrieval(self, tmp_path: Path) -> None:
+        """With the toggle on, retrieval pulls web sources in as well."""
+        client, db, core = _make_real_client(tmp_path)
+        assert core.has_web_search, "this test needs a wired web searcher"
+        token = _register_login(client, "sys_web_b", "pass")
+        headers = _auth_header(token)
+        conv_id = _create_conversation(client, headers)
+
+        response = client.post(
+            f"/api/conversations/{conv_id}/chat",
+            json={"message": self.ON_DOMAIN_QUESTION, "use_web": True},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        turn = response.json()
+        citations = turn.get("citations", [])
+        assert any(c["source"]["kind"] == "web" for c in citations), (
+            f"use_web=true should merge web sources: {[c['source']['kind'] for c in citations]}"
+        )
 
 
 class TestConversationCRUDE2E:
